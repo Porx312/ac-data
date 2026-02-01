@@ -39,17 +39,37 @@ class SafeBufferReader {
     }
 
     readString(): string {
-        const offsetBefore = this.offset;
+        if (this.offset >= this.buffer.length) return '';
+        
+        const startOffset = this.offset;
         let length = this.readUInt8();
         if (length === null) return '';
 
-        // HEURÍSTICA: Si el byte de longitud es sospechosamente alto (> 128),
-        // probablemente no es un string con prefijo de longitud.
-        if (length === 0) return '';
+        // --- DETECCIÓN DE UTF-32 (Padded 4-bytes) ---
+        
+        // Caso A: Sin prefijo de longitud (Autodetect)
+        // Si el byte 'length' + los siguientes 3 bytes parecen un char UTF-32 (bytes 1,2,3 son 0)
+        // y no es un null char inicial.
+        if (this.offset + 3 <= this.buffer.length) {
+            const val = this.buffer.readUInt32LE(this.offset - 1);
+            if ((val & 0xFFFFFF00) === 0 && val !== 0) {
+                // Probablemente no había longitud. Rebobinamos y leemos como UTF-32.
+                this.offset--;
+                let res = '';
+                while (this.offset + 4 <= this.buffer.length) {
+                    const charCode = this.buffer.readUInt32LE(this.offset);
+                    if (charCode === 0) { this.offset += 4; break; }
+                    if ((charCode & 0xFFFFFF00) !== 0) break;
+                    res += String.fromCharCode(charCode);
+                    this.offset += 4;
+                }
+                if (res.length > 0) return res.trim();
+                else this.offset = startOffset + 1; // Restaurar si falló
+            }
+        }
 
-        // Verificamos si es formato de 4-bytes-por-caracter (UTF-32/Padded)
-        // Buscamos patrones de 00 00 00 después de los carácteres
-        if (this.offset + (length * 4) <= this.buffer.length) {
+        // Caso B: Con prefijo de longitud
+        if (this.offset + (length * 4) <= this.buffer.length && length > 0) {
             const sub = this.buffer.slice(this.offset, this.offset + (length * 4));
             if (sub[1] === 0 && sub[2] === 0 && sub[3] === 0) {
                 let res = '';
@@ -61,8 +81,9 @@ class SafeBufferReader {
             }
         }
 
-        // Verificamos si es UTF-16LE (2 bytes por char)
-        // Buscamos si el segundo byte es 0
+        if (length === 0) return '';
+
+        // --- DETECCIÓN DE UTF-16LE (2-bytes) ---
         if (this.offset + (length * 2) <= this.buffer.length) {
             const sub = this.buffer.slice(this.offset, this.offset + (length * 2));
             if (sub[1] === 0) {
@@ -72,7 +93,7 @@ class SafeBufferReader {
             }
         }
 
-        // Caso por defecto: ASCII / UTF-8
+        // --- CASO POR DEFECTO: ASCII / UTF-8 ---
         if (this.offset + length <= this.buffer.length) {
             const res = this.buffer.toString('utf8', this.offset, this.offset + length);
             this.offset += length;
