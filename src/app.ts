@@ -211,9 +211,9 @@ server.on('message', (msg, rinfo) => {
                     if (cuts === 0 && (!driver.bestLap || (lapTime || 0) < driver.bestLap)) {
                         driver.bestLap = lapTime || 0;
                     }
-                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name} (SteamID: ${driver.guid}): ${timeStr}s (${cuts || 0} cortes)`);
+                    console.log(`🏁 [LAP] Name: ${driver.name} | SteamID: ${driver.guid} | Track: ${currentTrack} | Server: ${currentServer} | Time: ${timeStr}s | Cuts: ${cuts}`);
                 } else {
-                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta Detectada ID ${carId}: ${timeStr}s`);
+                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta Detectada ID ${carId}: ${timeStr}s | Pista: ${currentTrack} | Server: ${currentServer}`);
                 }
                 break;
             }
