@@ -19,6 +19,7 @@ interface DriverInfo {
     name: string;
     guid: string;
     model: string;
+    bestLap: number;
 }
 
 /**
@@ -175,7 +176,7 @@ server.on('message', (msg, rinfo) => {
                 const car = reader.readString();
                 const skin = reader.readString();
 
-                activeDrivers.set(carId, { name, guid, model: car });
+                activeDrivers.set(carId, { name, guid, model: car, bestLap: 0 });
                 console.log(`🏎️  [ACSP] Piloto Conectado [ID ${carId}]: ${name} (${car}) - SteamID: ${guid}`);
                 break;
             }
@@ -207,6 +208,9 @@ server.on('message', (msg, rinfo) => {
                 const timeStr = lapTime ? (lapTime / 1000).toFixed(3) : '?.???';
                 
                 if (driver) {
+                    if (cuts === 0 && (!driver.bestLap || (lapTime || 0) < driver.bestLap)) {
+                        driver.bestLap = lapTime || 0;
+                    }
                     console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name} (SteamID: ${driver.guid}): ${timeStr}s (${cuts || 0} cortes)`);
                 } else {
                     console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta Detectada ID ${carId}: ${timeStr}s`);
@@ -236,7 +240,9 @@ server.on('message', (msg, rinfo) => {
                 const speed = Math.sqrt(vx*vx + vy*vy + vz*vz) * 3.6;
 
                 if (driver) {
-                    process.stdout.write(`\r📡 [RT] ${currentTrack.slice(0, 10).padEnd(10)} | ${driver.name.padEnd(10)} | ${speed.toFixed(0).padStart(3)} km/h | ${dist.toFixed(0).padStart(6)}m          `);
+                    const timeStr = driver.bestLap > 0 ? (driver.bestLap / 1000).toFixed(3) : "No-Lap";
+                    const line = `\r📡 [RT] ${currentServer.slice(0,8)}|${currentTrack.slice(0,8)}|${timeStr}|${driver.guid.slice(-5)}|${driver.model.slice(0,8)}|${driver.name.slice(0,8)} | ${speed.toFixed(0).padStart(3)}kmh | ${dist.toFixed(0).padStart(5)}m  `;
+                    process.stdout.write(line.padEnd(100));
                 }
                 break;
             }
@@ -248,21 +254,27 @@ server.on('message', (msg, rinfo) => {
                 const carCount = reader.readUInt8();
                 
                 if (carCount !== null) {
-                    console.log(`\n📈 [ACSP] Leaderboard Update (${carCount} coches)`);
+                    // console.log(`\n📈 [ACSP] Leaderboard Update (${carCount} coches)`);
+                    
+                    // HEURÍSTICA: Si detectamos el patrón extra de 2 bytes (0x13 0xXX) en el hex
+                    // Saltamos si después del count hay algo inusual antes de los timpos
+                    if (reader.getRemaining() > carCount * 8) {
+                        reader.readUInt16LE(); 
+                    }
+
                     for (let i = 0; i < carCount; i++) {
                         const bestTime = reader.readUInt32LE();
-                        const carId = reader.readUInt32LE(); // En versiones nuevas CarId suele ser UInt32
+                        const carId = reader.readUInt32LE();
                         
                         if (bestTime === null || carId === null) break;
                         
-                        // 0x3B9AC9FF (999,999,999) es el valor por defecto para "sin tiempo"
                         if (bestTime > 0 && bestTime < 999999999) {
                             const driver = activeDrivers.get(carId);
-                            const timeStr = (bestTime / 1000).toFixed(3);
                             if (driver) {
-                                console.log(`   🏆 Best Lap [${driver.name}]: ${timeStr}s`);
-                            } else {
-                                console.log(`   🏆 Best Lap [ID ${carId}]: ${timeStr}s`);
+                                if (!driver.bestLap || bestTime < driver.bestLap) {
+                                    driver.bestLap = bestTime;
+                                }
+                                // console.log(`   🏆 Best Lap [${driver.name}]: ${(bestTime/1000).toFixed(3)}s`);
                             }
                         }
                     }
