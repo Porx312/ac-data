@@ -38,70 +38,55 @@ class SafeBufferReader {
         return val;
     }
 
-    /**
-     * Lee un string intentando detectar su formato (ASCII, UTF16 o UTF32/padded)
-     * Ahora más robusto: si no hay un byte de longitud claro, intenta detectarlo.
-     */
     readString(): string {
         const offsetBefore = this.offset;
         let length = this.readUInt8();
         if (length === null) return '';
 
-        // HEURÍSTICA: Si el siguiente byte después del "length" es un char UTF32 (00 00)
-        // Pero el byte de "length" parece un carácter printable (> 32), entonces 
-        // probablemente NO es un byte de longitud, sino el primer carácter del string.
-        if (length > 32 && this.offset + 3 <= this.buffer.length) {
-            if (this.buffer[this.offset] === 0 && 
-                this.buffer[this.offset + 1] === 0 && 
-                this.buffer[this.offset + 2] === 0) {
-                // Retrocedemos: el byte 'length' era en realidad el primer byte del string
-                this.offset = offsetBefore;
-                // Leemos carácteres de 4 bytes hasta que no coincidan con el patrón
-                let res = '';
-                while (this.offset + 4 <= this.buffer.length) {
-                    if (this.buffer[this.offset + 1] === 0 && 
-                        this.buffer[this.offset + 2] === 0 && 
-                        this.buffer[this.offset + 3] === 0) {
-                        res += String.fromCharCode(this.buffer.readUInt32LE(this.offset));
-                        this.offset += 4;
-                    } else break;
-                }
-                return res.trim();
-            }
-        }
-
+        // HEURÍSTICA: Si el byte de longitud es sospechosamente alto (> 128),
+        // probablemente no es un string con prefijo de longitud.
         if (length === 0) return '';
 
-        // Caso estándar: Detectar si los bytes que siguen son UTF32, UTF16 o ASCII
-        const bytesToRead4 = length * 4;
-        const bytesToRead2 = length * 2;
-        const bytesToRead1 = length;
-
-        if (this.offset + bytesToRead4 <= this.buffer.length) {
-            const sub = this.buffer.slice(this.offset, this.offset + bytesToRead4);
+        // Verificamos si es formato de 4-bytes-por-caracter (UTF-32/Padded)
+        // Buscamos patrones de 00 00 00 después de los carácteres
+        if (this.offset + (length * 4) <= this.buffer.length) {
+            const sub = this.buffer.slice(this.offset, this.offset + (length * 4));
             if (sub[1] === 0 && sub[2] === 0 && sub[3] === 0) {
                 let res = '';
                 for (let i = 0; i < length; i++) {
                     res += String.fromCharCode(sub.readUInt32LE(i * 4));
                 }
-                this.offset += bytesToRead4;
+                this.offset += length * 4;
                 return res.trim();
             }
         }
 
-        if (this.offset + bytesToRead2 <= this.buffer.length) {
-            const res = this.buffer.toString('utf16le', this.offset, this.offset + bytesToRead2);
-            this.offset += bytesToRead2;
+        // Verificamos si es UTF-16LE (2 bytes por char)
+        // Buscamos si el segundo byte es 0
+        if (this.offset + (length * 2) <= this.buffer.length) {
+            const sub = this.buffer.slice(this.offset, this.offset + (length * 2));
+            if (sub[1] === 0) {
+                const res = this.buffer.toString('utf16le', this.offset, this.offset + (length * 2));
+                this.offset += length * 2;
+                return res.split('\0')[0] || '';
+            }
+        }
+
+        // Caso por defecto: ASCII / UTF-8
+        if (this.offset + length <= this.buffer.length) {
+            const res = this.buffer.toString('utf8', this.offset, this.offset + length);
+            this.offset += length;
             return res.split('\0')[0] || '';
         }
 
-        if (this.offset + bytesToRead1 <= this.buffer.length) {
-            const res = this.buffer.toString('utf8', this.offset, this.offset + bytesToRead1);
-            this.offset += bytesToRead1;
-            return res.split('\0')[0] || '';
-        }
+        return 'Err';
+    }
 
-        return 'Err (Truncated)';
+    readUInt16LE(): number | null {
+        if (this.offset + 2 > this.buffer.length) return null;
+        const val = this.buffer.readUInt16LE(this.offset);
+        this.offset += 2;
+        return val;
     }
 
     getRemaining(): number {
@@ -128,10 +113,13 @@ server.on('message', (msg, rinfo) => {
         switch (type) {
             case ACSP.NEW_SESSION: {
                 console.log(`🌍 [ACSP] Nueva sesión (Type: ${type})`);
-                reader.readUInt8(); // protocol
-                reader.readUInt8(); // session idx
-                reader.readUInt8(); // current idx
-                reader.readUInt8(); // count
+                const proto = reader.readUInt8();
+                const sessionIdx = reader.readUInt8();
+                const currentIdx = reader.readUInt8();
+                const sessionCount = reader.readUInt8();
+
+                if (proto === null || sessionIdx === null || currentIdx === null || sessionCount === null) break;
+                
                 const serverName = reader.readString();
                 const trackName = reader.readString();
                 const trackConfig = reader.readString();
@@ -140,7 +128,7 @@ server.on('message', (msg, rinfo) => {
                 currentTrack = trackName;
                 console.log(`   - Server: ${serverName}`);
                 console.log(`   - Pista: ${trackName} (${trackConfig})`);
-                console.log(`   - Sesión: ${sessionName}`);
+                console.log(`   - Sesión: ${sessionName} (#${currentIdx + 1}/${sessionCount})`);
                 break;
             }
 
@@ -150,7 +138,7 @@ server.on('message', (msg, rinfo) => {
 
                 const name = reader.readString();
                 const guid = reader.readString();
-                reader.readUInt8(); // Byte desconocido (01)
+                reader.readUInt8(); // unknown toggle (01/00)
                 const car = reader.readString();
                 const skin = reader.readString();
 
@@ -162,10 +150,13 @@ server.on('message', (msg, rinfo) => {
             case ACSP.CAR_DISCONNECTED: {
                 const carId = reader.readUInt8();
                 const name = reader.readString();
-                const driver = activeDrivers.get(carId || -1);
+
+                if (carId === null) break;
+
+                const driver = activeDrivers.get(carId);
                 if (driver) {
                     console.log(`👋 [ACSP] Piloto Desconectado: ${driver.name} (SteamID: ${driver.guid})`);
-                    activeDrivers.delete(carId!);
+                    activeDrivers.delete(carId);
                 } else {
                     console.log(`👋 [ACSP] Coche Desconectado (ID: ${carId}) ${name ? '- ' + name : ''}`);
                 }
@@ -177,41 +168,38 @@ server.on('message', (msg, rinfo) => {
                 const lapTime = reader.readUInt32LE();
                 const cuts = reader.readUInt8();
                 
-                const driver = activeDrivers.get(carId || -1);
+                if (carId === null || lapTime === null || cuts === null) break;
+
+                const driver = activeDrivers.get(carId);
                 const timeStr = lapTime ? (lapTime / 1000).toFixed(3) : '?.???';
                 
                 if (driver) {
                     console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name} (SteamID: ${driver.guid}): ${timeStr}s (${cuts || 0} cortes)`);
                 } else {
-                    // Si el paquete está truncado, intentamos mostrar al menos el ID
-                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta Detectada ID ${carId}`);
+                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta Detectada ID ${carId}: ${timeStr}s`);
                 }
                 break;
             }
 
             case 130:
-                // Type 130 suele ser tiempo real (posiciones, rpm, etc)
-                // Console.log(`📊 [ACSP] Plugin Data (Tipo 130)`);
+                // Plugin Data (Realtime)
                 break;
             
             case 73: {
-                // Type 73: Session Update / Leaderboard
-                // Basado en los logs: [73][01][eb 5c 05 00 00][13][01] ... [best_time_le][car_id] ...
-                // El 01 inicial parece protocolo, eb 5c 05 00 es tiempo de sesión, 13 (19 decimal) es número de coches
-                reader.readUInt8(); // protocolo?
+                // Plugin Leaderboard Update
+                reader.readUInt8(); // proto
                 const sessionTime = reader.readUInt32LE();
                 const carCount = reader.readUInt8();
                 
-                if (carCount && carCount < 50) { // Límite de seguridad
-                    console.log(`📈 [ACSP] Actualización de Leaderboard (${carCount} coches)`);
+                if (carCount !== null && carCount < 50) {
+                    console.log(`📈 [ACSP] Leaderboard Update (${carCount} coches)`);
                     for (let i = 0; i < carCount; i++) {
                         const bestTime = reader.readUInt32LE();
                         const carId = reader.readUInt8();
                         
                         if (bestTime === null || carId === null) break;
                         
-                        // Si bestTime es 0xFFFFFFFF (o similar alto), significa que no tiene tiempo
-                        if (bestTime > 0 && bestTime < 3600000) { // < 1 hora
+                        if (bestTime !== null && bestTime > 0 && bestTime < 2147483647) {
                             const driver = activeDrivers.get(carId);
                             const timeStr = (bestTime / 1000).toFixed(3);
                             if (driver) {

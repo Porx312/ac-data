@@ -5,14 +5,22 @@ const client = dgram.createSocket('udp4');
 const TARGET_PORT = 13000;
 const TARGET_HOST = '127.0.0.1';
 
-function createRawUTF32(str: string): Buffer {
+/**
+ * Crea un buffer con length (byte) y caracteres de 4 bytes (UTF-32LE)
+ */
+function createUTF32WithLen(str: string): Buffer {
+    const lenBuf = Buffer.alloc(1);
+    lenBuf.writeUInt8(str.length, 0);
     const dataBuf = Buffer.alloc(str.length * 4);
     for (let i = 0; i < str.length; i++) {
         dataBuf.writeUInt32LE(str.charCodeAt(i), i * 4);
     }
-    return dataBuf;
+    return Buffer.concat([lenBuf, dataBuf]);
 }
 
+/**
+ * Crea un buffer con length (byte) y caracteres ASCII
+ */
 function createASCIIWithLen(str: string): Buffer {
     const lenBuf = Buffer.alloc(1);
     lenBuf.writeUInt8(str.length, 0);
@@ -21,9 +29,9 @@ function createASCIIWithLen(str: string): Buffer {
 }
 
 async function sendNewSession() {
-    console.log('Sending NEW_SESSION (Type 50)...');
+    console.log('Sending NEW_SESSION...');
     const type = Buffer.from([ACSP.NEW_SESSION]);
-    const protocol = Buffer.from([1, 0, 0, 1]); // proto, idx, curr, count
+    const protocol = Buffer.from([1, 0, 0, 1]); 
     const serverName = createASCIIWithLen('Drift Server');
     const trackName = createASCIIWithLen('vallelunga');
     const trackConfig = createASCIIWithLen('drift');
@@ -34,11 +42,11 @@ async function sendNewSession() {
 }
 
 async function sendNewCar() {
-    console.log('Sending NEW_CAR_CONNECTION (Type 51)...');
+    console.log('Sending NEW_CAR_CONNECTION...');
     const type = Buffer.from([ACSP.NEW_CAR_CONNECTION]);
     const carId = Buffer.from([4]);
-    const driverName = createRawUTF32('Porx');
-    const guid = createASCIIWithLen('76561199230780195'); // En el log del user a veces es ASCII a veces Padded, probamos ASCII
+    const driverName = createUTF32WithLen('Porx'); // Con prefijo de longitud
+    const guid = createASCIIWithLen('76561199230780195'); 
     const unknown = Buffer.from([1]);
     const carModel = createASCIIWithLen('ks_toyota_ae86');
     const carSkin = createASCIIWithLen('drift');
@@ -52,7 +60,7 @@ async function sendLeaderboard() {
     const type = Buffer.from([73]);
     const proto = Buffer.from([1]);
     const time = Buffer.alloc(4);
-    time.writeUInt32LE(500000, 0); // 500s de sesion
+    time.writeUInt32LE(500000, 0);
     const count = Buffer.from([1]);
     
     const bestTime = Buffer.alloc(4);
@@ -70,7 +78,7 @@ setTimeout(async () => {
         setTimeout(async () => {
             await sendLeaderboard();
             setTimeout(() => {
-                console.log('Verification packets sent.');
+                console.log('Verificación enviada.');
                 client.close();
             }, 500);
         }, 500);
