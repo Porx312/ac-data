@@ -12,6 +12,8 @@ const rl = readline.createInterface({
 
 const activeDrivers = new Map<number, DriverInfo>();
 let currentTrack = 'Unknown';
+let currentServer = 'Unknown';
+let currentConfig = '';
 
 interface DriverInfo {
     name: string;
@@ -110,6 +112,13 @@ class SafeBufferReader {
         return val;
     }
 
+    readFloatLE(): number | null {
+        if (this.offset + 4 > this.buffer.length) return null;
+        const val = this.buffer.readFloatLE(this.offset);
+        this.offset += 4;
+        return val;
+    }
+
     getRemaining(): number {
         return this.buffer.length - this.offset;
     }
@@ -146,7 +155,10 @@ server.on('message', (msg, rinfo) => {
                 const trackConfig = reader.readString();
                 const sessionName = reader.readString();
 
+                currentServer = serverName;
                 currentTrack = trackName;
+                currentConfig = trackConfig;
+                
                 console.log(`   - Server: ${serverName}`);
                 console.log(`   - Pista: ${trackName} (${trackConfig})`);
                 console.log(`   - Sesión: ${sessionName} (#${currentIdx + 1}/${sessionCount})`);
@@ -202,29 +214,55 @@ server.on('message', (msg, rinfo) => {
                 break;
             }
 
-            case 130:
-                // Plugin Data (Realtime)
+            case 130: {
+                // [ACSP] Real-time Telemetry (Type 130)
+                const carId = reader.readUInt8();
+                if (carId === null) break;
+
+                reader.readUInt8(); // unknown/proto
+                
+                const px = reader.readFloatLE();
+                const py = reader.readFloatLE();
+                const pz = reader.readFloatLE();
+                const vx = reader.readFloatLE();
+                const vy = reader.readFloatLE();
+                const vz = reader.readFloatLE();
+                const dist = reader.readFloatLE();
+
+                if (dist === null || vx === null || vy === null || vz === null) break;
+
+                const driver = activeDrivers.get(carId);
+                // Calcular velocidad en km/h a partir de m/s
+                const speed = Math.sqrt(vx*vx + vy*vy + vz*vz) * 3.6;
+
+                if (driver) {
+                    process.stdout.write(`\r📡 [RT] ${currentTrack.slice(0, 10).padEnd(10)} | ${driver.name.padEnd(10)} | ${speed.toFixed(0).padStart(3)} km/h | ${dist.toFixed(0).padStart(6)}m          `);
+                }
                 break;
+            }
             
             case 73: {
-                // Plugin Leaderboard Update
+                // [ACSP] Leaderboard Update
                 reader.readUInt8(); // proto
                 const sessionTime = reader.readUInt32LE();
                 const carCount = reader.readUInt8();
                 
-                if (carCount !== null && carCount < 50) {
-                    console.log(`📈 [ACSP] Leaderboard Update (${carCount} coches)`);
+                if (carCount !== null) {
+                    console.log(`\n📈 [ACSP] Leaderboard Update (${carCount} coches)`);
                     for (let i = 0; i < carCount; i++) {
                         const bestTime = reader.readUInt32LE();
-                        const carId = reader.readUInt8();
+                        const carId = reader.readUInt32LE(); // En versiones nuevas CarId suele ser UInt32
                         
                         if (bestTime === null || carId === null) break;
                         
-                        if (bestTime !== null && bestTime > 0 && bestTime < 2147483647) {
+                        // 0x3B9AC9FF (999,999,999) es el valor por defecto para "sin tiempo"
+                        if (bestTime > 0 && bestTime < 999999999) {
                             const driver = activeDrivers.get(carId);
                             const timeStr = (bestTime / 1000).toFixed(3);
                             if (driver) {
                                 console.log(`   🏆 Best Lap [${driver.name}]: ${timeStr}s`);
+                            } else {
+                                console.log(`   🏆 Best Lap [ID ${carId}]: ${timeStr}s`);
                             }
                         }
                     }
@@ -260,11 +298,21 @@ function askForRegistration() {
 
 function sendRegistration(host: string, port: number) {
     console.log(`✉️ Enviando solicitud de registro a ${host}:${port}...`);
-    const buffer = Buffer.alloc(1);
-    buffer.writeUInt8(ACSP.SUBSCRIBE_UPDATE, 0); // 200
-    server.send(buffer, 0, buffer.length, port, host, (err) => {
+    
+    // Suscribirse a actualizaciones (Protocolo 200)
+    const subscribeBuffer = Buffer.alloc(1);
+    subscribeBuffer.writeUInt8(ACSP.SUBSCRIBE_UPDATE, 0); 
+    server.send(subscribeBuffer, 0, subscribeBuffer.length, port, host, (err) => {
         if (err) console.error('❌ Error enviando registro:', err);
-        else console.log('✅ Registro enviado. Espera unos segundos a ver si llega algo.');
+        else console.log('✅ Suscripción enviada.');
+    });
+
+    // Solicitar información de la sesión inmediatamente (Protocolo 211)
+    const sessionBuffer = Buffer.alloc(1);
+    sessionBuffer.writeUInt8(ACSP.GET_SESSION_INFO, 0);
+    server.send(sessionBuffer, 0, sessionBuffer.length, port, host, (err) => {
+        if (err) console.error('❌ Error solicitando info de sesión:', err);
+        else console.log('✅ Solicitud de información de sesión enviada.');
     });
 }
 
