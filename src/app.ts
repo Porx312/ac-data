@@ -1,54 +1,58 @@
 import ACRemoteTelemetryClient from 'ac-remote-telemetry-client';
 
-const AC_IP = '127.0.0.1'; // Cambia esto si el juego corre en otra IP
+const AC_IP = '127.0.0.1'; // IP del PC donde corre Assetto Corsa
 const client = new ACRemoteTelemetryClient(AC_IP);
 
-let sessionInfo = {
-    car: 'Unknown',
-    track: 'Unknown',
-    bestLap: Infinity
-};
+console.log('--- Diagnóstico de Telemetría v2 ---');
+console.log(`Configurado para conectar a: ${AC_IP}:9996`);
 
-console.log('--- Diagnóstico de Telemetría ---');
-console.log(`Conectando a: ${AC_IP}:9996`);
+// Escuchar errores de red
+(client as any).client.on('error', (err: any) => {
+    console.error('❌ Error de red (UDP):', err);
+});
 
-// Implement desired listeners
+// Listener de bajo nivel para confirmar que el socket se activa
+(client as any).client.on('listening', () => {
+    const address = (client as any).client.address();
+    console.log(`✅ Socket local abierto en el puerto ${address.port} (esperando datos de AC)`);
+});
+
+// Capturar CUALQUIER mensaje entrante
+(client as any).client.on('message', (msg: Buffer, rinfo: any) => {
+    console.log(`📡 Datos recibidos desde AC (${rinfo.address}:${rinfo.port}) - ${msg.length} bytes`);
+});
+
 client.on('HANDSHAKER_RESPONSE', (data) => {
-    sessionInfo.car = data.carName;
-    sessionInfo.track = data.trackName;
-    console.log(`🏎️  Sesión Iniciada: ${sessionInfo.car} @ ${sessionInfo.track}`);
+    console.log(`🏎️  ¡Conectado! Coche: ${data.carName} | Pista: ${data.trackName}`);
 });
 
 client.on('RT_CAR_INFO', (data) => {
-    if (data.bestLap > 0 && data.bestLap < sessionInfo.bestLap) {
-        sessionInfo.bestLap = data.bestLap;
-        const seconds = (data.bestLap / 1000).toFixed(3);
-        console.log(`⏱️  Nuevo mejor tiempo: ${seconds}s`);
+    if (data.bestLap > 0) {
+        console.log(`⏱️  Lap: ${data.lapCount} | Best: ${(data.bestLap / 1000).toFixed(3)}s`);
     }
 });
 
-client.on('RT_LAP', (data) => {
-    const seconds = (data.time / 1000).toFixed(3);
-    console.log(`🏁 Vuelta completada: ${seconds}s`);
-});
+// Iniciar listeners
+client.start();
 
-// Listener de bajo nivel para depuración
-(client as any).client.on('message', (msg: Buffer, rinfo: any) => {
-    console.log(`📡 Mensaje UDP recibido de ${rinfo.address}:${rinfo.port} - Tamaño: ${rinfo.size} bytes`);
-});
+// Enviar handshake inicial y reintentar cada 5 segundos hasta conectar
+console.log('🚀 Enviando primer handshake...');
+client.handshake();
+client.subscribeUpdate();
+client.subscribeSpot();
 
-(client as any).client.on('listening', () => {
-    console.log('✅ Socket UDP escuchando. Enviando handshake...');
-    // El handshake debe enviarse después de que el socket esté listo
+const retryInterval = setInterval(() => {
+    console.log('🔄 Reintentando handshake (asegúrate de que el juego esté en pista)...');
     client.handshake();
     client.subscribeUpdate();
     client.subscribeSpot();
+}, 5000);
+
+// Detener reintentos si conectamos
+client.on('HANDSHAKER_RESPONSE', () => {
+    clearInterval(retryInterval);
 });
 
-// Iniciar
-client.start();
-
-// Recordatorio para el usuario
-console.log('💡 Tip: Asegúrate de que Assetto Corsa esté en pista (driving), no solo en los menús.');
+console.log('💡 Tip: Si el juego está en otro PC, cambia "127.0.0.1" por su IP local.');
 
 
