@@ -132,8 +132,15 @@ server.on('message', (msg, rinfo) => {
                 reader.readUInt8(); // session idx
                 reader.readUInt8(); // current idx
                 reader.readUInt8(); // count
-                console.log(`   - Server: ${reader.readString()}`);
-                console.log(`   - Pista: ${reader.readString()}`);
+                const serverName = reader.readString();
+                const trackName = reader.readString();
+                const trackConfig = reader.readString();
+                const sessionName = reader.readString();
+
+                currentTrack = trackName;
+                console.log(`   - Server: ${serverName}`);
+                console.log(`   - Pista: ${trackName} (${trackConfig})`);
+                console.log(`   - Sesión: ${sessionName}`);
                 break;
             }
 
@@ -141,7 +148,6 @@ server.on('message', (msg, rinfo) => {
                 const carId = reader.readUInt8();
                 if (carId === null) break;
 
-                // Orden detectado por logs del usuario: Name (Padded), GUID (Padded), ?, Car (ASCII), Skin (ASCII)
                 const name = reader.readString();
                 const guid = reader.readString();
                 reader.readUInt8(); // Byte desconocido (01)
@@ -155,7 +161,7 @@ server.on('message', (msg, rinfo) => {
 
             case ACSP.CAR_DISCONNECTED: {
                 const carId = reader.readUInt8();
-                const name = reader.readString(); // A veces envían el nombre al desconectar
+                const name = reader.readString();
                 const driver = activeDrivers.get(carId || -1);
                 if (driver) {
                     console.log(`👋 [ACSP] Piloto Desconectado: ${driver.name} (SteamID: ${driver.guid})`);
@@ -177,18 +183,45 @@ server.on('message', (msg, rinfo) => {
                 if (driver) {
                     console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name} (SteamID: ${driver.guid}): ${timeStr}s (${cuts || 0} cortes)`);
                 } else {
-                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ID ${carId}: ${timeStr}s (${cuts || 0} cortes)`);
+                    // Si el paquete está truncado, intentamos mostrar al menos el ID
+                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta Detectada ID ${carId}`);
                 }
                 break;
             }
 
             case 130:
-                console.log(`📊 [ACSP] Plugin Data (Tipo 130 - Realtime Update)`);
+                // Type 130 suele ser tiempo real (posiciones, rpm, etc)
+                // Console.log(`📊 [ACSP] Plugin Data (Tipo 130)`);
                 break;
             
-            case 73:
-                console.log(`📈 [ACSP] Plugin Data (Tipo 73 - Telemetry Update)`);
+            case 73: {
+                // Type 73: Session Update / Leaderboard
+                // Basado en los logs: [73][01][eb 5c 05 00 00][13][01] ... [best_time_le][car_id] ...
+                // El 01 inicial parece protocolo, eb 5c 05 00 es tiempo de sesión, 13 (19 decimal) es número de coches
+                reader.readUInt8(); // protocolo?
+                const sessionTime = reader.readUInt32LE();
+                const carCount = reader.readUInt8();
+                
+                if (carCount && carCount < 50) { // Límite de seguridad
+                    console.log(`📈 [ACSP] Actualización de Leaderboard (${carCount} coches)`);
+                    for (let i = 0; i < carCount; i++) {
+                        const bestTime = reader.readUInt32LE();
+                        const carId = reader.readUInt8();
+                        
+                        if (bestTime === null || carId === null) break;
+                        
+                        // Si bestTime es 0xFFFFFFFF (o similar alto), significa que no tiene tiempo
+                        if (bestTime > 0 && bestTime < 3600000) { // < 1 hora
+                            const driver = activeDrivers.get(carId);
+                            const timeStr = (bestTime / 1000).toFixed(3);
+                            if (driver) {
+                                console.log(`   🏆 Best Lap [${driver.name}]: ${timeStr}s`);
+                            }
+                        }
+                    }
+                }
                 break;
+            }
 
             default:
                 console.log(`❓ [ACSP] Paquete desconocido: ${type}`);
