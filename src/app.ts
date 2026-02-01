@@ -1,58 +1,97 @@
-import ACRemoteTelemetryClient from 'ac-remote-telemetry-client';
+import dgram from 'dgram';
+import { ACSP } from './types/ac-server-protocol.js';
 
-const AC_IP = '127.0.0.1'; // IP del PC donde corre Assetto Corsa
-const client = new ACRemoteTelemetryClient(AC_IP);
+const LISTEN_PORT = 12000;
+const server = dgram.createSocket('udp4');
 
-console.log('--- Diagnóstico de Telemetría v2 ---');
-console.log(`Configurado para conectar a: ${AC_IP}:9996`);
+interface DriverInfo {
+    name: string;
+    guid: string;
+    model: string;
+}
 
-// Escuchar errores de red
-(client as any).client.on('error', (err: any) => {
-    console.error('❌ Error de red (UDP):', err);
+const activeDrivers = new Map<number, DriverInfo>();
+let currentTrack = 'Unknown';
+
+console.log('--- Assetto Corsa Server Admin Listener ---');
+
+server.on('error', (err) => {
+    console.error(`❌ Server Error:\n${err.stack}`);
+    server.close();
 });
 
-// Listener de bajo nivel para confirmar que el socket se activa
-(client as any).client.on('listening', () => {
-    const address = (client as any).client.address();
-    console.log(`✅ Socket local abierto en el puerto ${address.port} (esperando datos de AC)`);
-});
+server.on('message', (msg, rinfo) => {
+    const type = msg.readUInt8(0);
+    // console.log(`📡 Recibido tipo ${type} de ${rinfo.address}:${rinfo.port}`);
 
-// Capturar CUALQUIER mensaje entrante
-(client as any).client.on('message', (msg: Buffer, rinfo: any) => {
-    console.log(`📡 Datos recibidos desde AC (${rinfo.address}:${rinfo.port}) - ${msg.length} bytes`);
-});
+    switch (type) {
+        case ACSP.NEW_SESSION: {
+            // Un packete complejo, extraemos lo básico
+            // El offset suele variar según versión, pero el nombre suele estar tras version byte
+            // Para simplificar buscamos strings utf-16le
+            const trackName = readUTF16String(msg, 2); 
+            currentTrack = trackName;
+            console.log(`🌍 Nueva sesión detectada en: ${currentTrack}`);
+            break;
+        }
 
-client.on('HANDSHAKER_RESPONSE', (data) => {
-    console.log(`🏎️  ¡Conectado! Coche: ${data.carName} | Pista: ${data.trackName}`);
-});
+        case ACSP.NEW_CAR_CONNECTION: {
+            const carId = msg.readUInt8(1);
+            const carModel = readUTF16String(msg, 2);
+            const driverName = readUTF16String(msg, 2 + (carModel.length + 1) * 2);
+            const guid = readUTF16String(msg, 2 + (carModel.length + 1) * 2 + (driverName.length + 1) * 2);
 
-client.on('RT_CAR_INFO', (data) => {
-    if (data.bestLap > 0) {
-        console.log(`⏱️  Lap: ${data.lapCount} | Best: ${(data.bestLap / 1000).toFixed(3)}s`);
+            activeDrivers.set(carId, { name: driverName, guid, model: carModel });
+            console.log(`🏎️  Piloto Conectado [ID ${carId}]: ${driverName} (${carModel}) - GUID: ${guid}`);
+            break;
+        }
+
+        case ACSP.CAR_DISCONNECTED: {
+            const carId = msg.readUInt8(1);
+            const driver = activeDrivers.get(carId);
+            if (driver) {
+                console.log(`👋 Piloto Desconectado: ${driver.name}`);
+                activeDrivers.delete(carId);
+            }
+            break;
+        }
+
+        case ACSP.LAP_COMPLETED: {
+            const carId = msg.readUInt8(1);
+            const lapTime = msg.readUInt32LE(2); // ms
+            const cuts = msg.readUInt8(6);
+            
+            const driver = activeDrivers.get(carId);
+            const timeStr = (lapTime / 1000).toFixed(3);
+            
+            if (driver) {
+                if (cuts === 0) {
+                    console.log(`✅ ¡VUELTA VÁLIDA! [${driver.name}]: ${timeStr}s en ${driver.model}`);
+                    // AQUÍ ES DONDE GUARDARÍAS EN TU BASE DE DATOS
+                } else {
+                    console.log(`❌ Vuelta invalidada (${cuts} cortes) [${driver.name}]: ${timeStr}s`);
+                }
+            }
+            break;
+        }
     }
 });
 
-// Iniciar listeners
-client.start();
-
-// Enviar handshake inicial y reintentar cada 5 segundos hasta conectar
-console.log('🚀 Enviando primer handshake...');
-client.handshake();
-client.subscribeUpdate();
-client.subscribeSpot();
-
-const retryInterval = setInterval(() => {
-    console.log('🔄 Reintentando handshake (asegúrate de que el juego esté en pista)...');
-    client.handshake();
-    client.subscribeUpdate();
-    client.subscribeSpot();
-}, 5000);
-
-// Detener reintentos si conectamos
-client.on('HANDSHAKER_RESPONSE', () => {
-    clearInterval(retryInterval);
+server.on('listening', () => {
+    const address = server.address();
+    console.log(`� Oyente UDP activo en ${address.address}:${address.port}`);
+    console.log(`⚠️  Configura tus servidores para enviar datos a esta IP:${address.port}`);
 });
 
-console.log('💡 Tip: Si el juego está en otro PC, cambia "127.0.0.1" por su IP local.');
+server.bind(LISTEN_PORT);
 
+/**
+ * Utilidad simple para leer strings UTF-16LE de los paquetes de AC
+ */
+function readUTF16String(buffer: Buffer, offset: number): string {
+    const length = buffer.readUInt8(offset);
+    if (length === 0) return '';
+    return buffer.toString('utf16le', offset + 1, offset + 1 + (length * 2));
+}
 
+console.log('💡 Tip: No olvides abrir el puerto UDP 12000 en tu router/firewall.');
