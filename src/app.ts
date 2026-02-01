@@ -149,7 +149,7 @@ server.on('message', (msg, rinfo) => {
                 const skin = reader.readString();
 
                 activeDrivers.set(carId, { name, guid, model: car });
-                console.log(`🏎️  [ACSP] Piloto Conectado [ID ${carId}]: ${name} (${car}) - GUID: ${guid}`);
+                console.log(`🏎️  [ACSP] Piloto Conectado [ID ${carId}]: ${name} (${car}) - SteamID: ${guid}`);
                 break;
             }
 
@@ -158,7 +158,7 @@ server.on('message', (msg, rinfo) => {
                 const name = reader.readString(); // A veces envían el nombre al desconectar
                 const driver = activeDrivers.get(carId || -1);
                 if (driver) {
-                    console.log(`👋 [ACSP] Piloto Desconectado: ${driver.name} (ID: ${carId})`);
+                    console.log(`👋 [ACSP] Piloto Desconectado: ${driver.name} (SteamID: ${driver.guid})`);
                     activeDrivers.delete(carId!);
                 } else {
                     console.log(`👋 [ACSP] Coche Desconectado (ID: ${carId}) ${name ? '- ' + name : ''}`);
@@ -175,7 +175,7 @@ server.on('message', (msg, rinfo) => {
                 const timeStr = lapTime ? (lapTime / 1000).toFixed(3) : '?.???';
                 
                 if (driver) {
-                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name}: ${timeStr}s (${cuts || 0} cortes)`);
+                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name} (SteamID: ${driver.guid}): ${timeStr}s (${cuts || 0} cortes)`);
                 } else {
                     console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ID ${carId}: ${timeStr}s (${cuts || 0} cortes)`);
                 }
