@@ -12,37 +12,37 @@ function createUTF16Buffer(str: string): Buffer {
     return Buffer.concat([lenBuf, strBuf]);
 }
 
-async function sendNewSession() {
-    console.log('Sending NEW_SESSION...');
-    const type = Buffer.from([ACSP.NEW_SESSION]);
-    const protocol = Buffer.from([1]);
-    const sessionIdx = Buffer.from([0]);
-    const currentSessionIdx = Buffer.from([0]);
-    const sessionCount = Buffer.from([1]);
+/**
+ * Simula el formato de 4-bytes por char visto en los logs del usuario
+ */
+function createPaddedBuffer(str: string): Buffer {
+    const lenBuf = Buffer.alloc(1);
+    lenBuf.writeUInt8(str.length, 0);
     
-    const serverName = createUTF16Buffer('Test Server');
-    const trackName = createUTF16Buffer('monza');
-    const trackConfig = createUTF16Buffer('gp');
-    const sessionName = createUTF16Buffer('Qualifying');
-    
-    const msg = Buffer.concat([
-        type, protocol, sessionIdx, currentSessionIdx, sessionCount,
-        serverName, trackName, trackConfig, sessionName
-    ]);
-    
-    client.send(msg, TARGET_PORT, TARGET_HOST);
+    const dataBuf = Buffer.alloc(str.length * 4);
+    for (let i = 0; i < str.length; i++) {
+        dataBuf.writeUInt32LE(str.charCodeAt(i), i * 4);
+    }
+    return Buffer.concat([lenBuf, dataBuf]);
 }
 
-async function sendNewCar() {
-    console.log('Sending NEW_CAR_CONNECTION...');
+async function sendPoisonLap() {
+    console.log('Sending malformed LAP_COMPLETED (2 bytes)...');
+    client.send(Buffer.from([ACSP.LAP_COMPLETED, 0x01]), TARGET_PORT, TARGET_HOST);
+}
+
+async function sendPaddedCar() {
+    console.log('Sending NEW_CAR_CONNECTION with padded strings...');
     const type = Buffer.from([ACSP.NEW_CAR_CONNECTION]);
-    const carId = Buffer.from([7]);
+    const carId = Buffer.from([4]);
     
-    const carModel = createUTF16Buffer('rss_formula_hybrid_2023');
-    const carSkin = createUTF16Buffer('red_bull');
-    const driverName = createUTF16Buffer('Max Verstappen');
-    const driverTeam = createUTF16Buffer('Red Bull Racing');
-    const guid = createUTF16Buffer('12345678901234567');
+    // Formato detectado: [carId][Padded Name][Padded Car][Padded Color][Normal Name]...
+    // Probamos con DriverName y GUID en formato padded
+    const carModel = createPaddedBuffer('ks_toyota_ae86');
+    const carSkin = createPaddedBuffer('white');
+    const driverName = createPaddedBuffer('Porx');
+    const driverTeam = createPaddedBuffer('None');
+    const guid = createPaddedBuffer('76561199230780195');
     
     const msg = Buffer.concat([
         type, carId, carModel, carSkin, driverName, driverTeam, guid
@@ -52,11 +52,11 @@ async function sendNewCar() {
 }
 
 setTimeout(async () => {
-    await sendNewSession();
+    await sendPoisonLap();
     setTimeout(async () => {
-        await sendNewCar();
+        await sendPaddedCar();
         setTimeout(() => {
-            console.log('Tests sent.');
+            console.log('Poison tests sent.');
             client.close();
         }, 500);
     }, 500);
