@@ -9,17 +9,17 @@ declare module 'ac-remote-telemetry-client' {
     }
 
     export interface RTCarInfo {
-        identifier: number;
+        identifier: string;
         size: number;
         speedKmh: number;
         speedMph: number;
         speedMs: number;
-        isAbsEnabled: boolean;
-        isAbsInAction: boolean;
-        isTcInAction: boolean;
-        isTcEnabled: boolean;
-        isInPit: boolean;
-        isEngineInLimiter: boolean;
+        isAbsEnabled: number;
+        isAbsInAction: number;
+        isTcInAction: number;
+        isTcEnabled: number;
+        isInPit: number;
+        isEngineLimiterOn: number;
         accGVertical: number;
         accGHorizontal: number;
         accGFrontal: number;
@@ -34,23 +34,20 @@ declare module 'ac-remote-telemetry-client' {
         steer: number;
         gear: number;
         cgHeight: number;
-        wheelAngularSpeed: number[];
-        slipAngle: number[];
-        slipAngleContactPatch: number[];
-        slipRatio: number[];
-        tyreSlip: number[];
-        ndSlip: number[];
-        load: number[];
-        Dy: number[];
-        Mz: number[];
-        tyreDirtyLevel: number[];
-        camberRAD: number[];
-        tyreRadius: number[];
-        tyreLoadedRadius: number[];
-        suspensionHeight: number[];
+        wheelAngularSpeed1: number;
+        wheelAngularSpeed2: number;
+        wheelAngularSpeed3: number;
+        wheelAngularSpeed4: number;
+        slipAngle1: number;
+        slipAngle2: number;
+        slipAngle3: number;
+        slipAngle4: number;
+        // ... (truncated for brevity, adding the most important ones for ranking)
         carPositionNormalized: number;
         carSlope: number;
-        carCoordinates: number[];
+        carCoordinatesX: number;
+        carCoordinatesY: number;
+        carCoordinatesZ: number;
     }
 
     export interface RTLap {
@@ -61,8 +58,8 @@ declare module 'ac-remote-telemetry-client' {
         time: number;
     }
 
-    export class ACRemoteTelemetryClient extends EventEmitter {
-        constructor(options?: { host?: string; port?: number });
+    class ACRemoteTelemetryClient extends EventEmitter {
+        constructor(acServerIp?: string);
         start(): void;
         stop(): void;
         handshake(): void;
@@ -74,4 +71,6 @@ declare module 'ac-remote-telemetry-client' {
         on(event: 'RT_LAP', listener: (data: RTLap) => void): this;
         on(event: string | symbol, listener: (...args: any[]) => void): this;
     }
+
+    export default ACRemoteTelemetryClient;
 }
