@@ -40,46 +40,65 @@ class SafeBufferReader {
 
     /**
      * Lee un string intentando detectar su formato (ASCII, UTF16 o UTF32/padded)
+     * Ahora más robusto: si no hay un byte de longitud claro, intenta detectarlo.
      */
     readString(): string {
-        const length = this.readUInt8();
-        if (length === null || length === 0) return '';
+        const offsetBefore = this.offset;
+        let length = this.readUInt8();
+        if (length === null) return '';
 
-        // Intentamos detectar si es formato de 4-bytes-por-caracter mirando los siguientes bytes
-        // Si hay suficientes bytes para leer length * 4, comprobamos si parece estar "padded" con ceros
+        // HEURÍSTICA: Si el siguiente byte después del "length" es un char UTF32 (00 00)
+        // Pero el byte de "length" parece un carácter printable (> 32), entonces 
+        // probablemente NO es un byte de longitud, sino el primer carácter del string.
+        if (length > 32 && this.offset + 3 <= this.buffer.length) {
+            if (this.buffer[this.offset] === 0 && 
+                this.buffer[this.offset + 1] === 0 && 
+                this.buffer[this.offset + 2] === 0) {
+                // Retrocedemos: el byte 'length' era en realidad el primer byte del string
+                this.offset = offsetBefore;
+                // Leemos carácteres de 4 bytes hasta que no coincidan con el patrón
+                let res = '';
+                while (this.offset + 4 <= this.buffer.length) {
+                    if (this.buffer[this.offset + 1] === 0 && 
+                        this.buffer[this.offset + 2] === 0 && 
+                        this.buffer[this.offset + 3] === 0) {
+                        res += String.fromCharCode(this.buffer.readUInt32LE(this.offset));
+                        this.offset += 4;
+                    } else break;
+                }
+                return res.trim();
+            }
+        }
+
+        if (length === 0) return '';
+
+        // Caso estándar: Detectar si los bytes que siguen son UTF32, UTF16 o ASCII
         const bytesToRead4 = length * 4;
         const bytesToRead2 = length * 2;
         const bytesToRead1 = length;
 
         if (this.offset + bytesToRead4 <= this.buffer.length) {
-            // Caso sospechoso: 4 bytes por char (visto en algunos servidores)
             const sub = this.buffer.slice(this.offset, this.offset + bytesToRead4);
-            // Si parece que cada char tiene ceros extra (ej: P \0 \0 \0 o \0 \0 \0)
             if (sub[1] === 0 && sub[2] === 0 && sub[3] === 0) {
                 let res = '';
                 for (let i = 0; i < length; i++) {
                     res += String.fromCharCode(sub.readUInt32LE(i * 4));
                 }
                 this.offset += bytesToRead4;
-                return res;
+                return res.trim();
             }
         }
 
         if (this.offset + bytesToRead2 <= this.buffer.length) {
-            // Caso estándar: UTF16LE
-            const sub = this.buffer.slice(this.offset, this.offset + bytesToRead2);
-            if (sub[1] === 0) {
-                const res = this.buffer.toString('utf16le', this.offset, this.offset + bytesToRead2);
-                this.offset += bytesToRead2;
-                return res;
-            }
+            const res = this.buffer.toString('utf16le', this.offset, this.offset + bytesToRead2);
+            this.offset += bytesToRead2;
+            return res.split('\0')[0] || '';
         }
 
         if (this.offset + bytesToRead1 <= this.buffer.length) {
-            // Caso: ASCII simple
             const res = this.buffer.toString('utf8', this.offset, this.offset + bytesToRead1);
             this.offset += bytesToRead1;
-            return res;
+            return res.split('\0')[0] || '';
         }
 
         return 'Err (Truncated)';
@@ -87,10 +106,6 @@ class SafeBufferReader {
 
     getRemaining(): number {
         return this.buffer.length - this.offset;
-    }
-
-    getCurrentOffset(): number {
-        return this.offset;
     }
 }
 
@@ -112,21 +127,13 @@ server.on('message', (msg, rinfo) => {
 
         switch (type) {
             case ACSP.NEW_SESSION: {
-                console.log(`🌍 [ACSP] Nueva sesión detectada (Type: ${type})`);
-                const protocolVersion = reader.readUInt8();
-                const sessionIndex = reader.readUInt8();
-                const currentSessionIndex = reader.readUInt8();
-                const sessionCount = reader.readUInt8();
-                
-                const serverName = reader.readString();
-                const trackName = reader.readString();
-                const trackConfig = reader.readString();
-                const sessionName = reader.readString();
-                
-                currentTrack = trackName;
-                console.log(`   - Server: ${serverName}`);
-                console.log(`   - Pista: ${trackName} (${trackConfig})`);
-                console.log(`   - Sesión: ${sessionName} (${(currentSessionIndex || 0) + 1}/${sessionCount})`);
+                console.log(`🌍 [ACSP] Nueva sesión (Type: ${type})`);
+                reader.readUInt8(); // protocol
+                reader.readUInt8(); // session idx
+                reader.readUInt8(); // current idx
+                reader.readUInt8(); // count
+                console.log(`   - Server: ${reader.readString()}`);
+                console.log(`   - Pista: ${reader.readString()}`);
                 break;
             }
 
@@ -134,27 +141,27 @@ server.on('message', (msg, rinfo) => {
                 const carId = reader.readUInt8();
                 if (carId === null) break;
 
-                const carModel = reader.readString();
-                const carSkin = reader.readString();
-                const driverName = reader.readString();
-                const driverTeam = reader.readString();
+                // Orden detectado por logs del usuario: Name (Padded), GUID (Padded), ?, Car (ASCII), Skin (ASCII)
+                const name = reader.readString();
                 const guid = reader.readString();
+                reader.readUInt8(); // Byte desconocido (01)
+                const car = reader.readString();
+                const skin = reader.readString();
 
-                activeDrivers.set(carId, { name: driverName, guid, model: carModel });
-                console.log(`🏎️  [ACSP] Piloto Conectado [ID ${carId}]: ${driverName} (${carModel}) - GUID: ${guid}`);
+                activeDrivers.set(carId, { name, guid, model: car });
+                console.log(`🏎️  [ACSP] Piloto Conectado [ID ${carId}]: ${name} (${car}) - GUID: ${guid}`);
                 break;
             }
 
             case ACSP.CAR_DISCONNECTED: {
                 const carId = reader.readUInt8();
-                if (carId === null) break;
-
-                const driver = activeDrivers.get(carId);
+                const name = reader.readString(); // A veces envían el nombre al desconectar
+                const driver = activeDrivers.get(carId || -1);
                 if (driver) {
                     console.log(`👋 [ACSP] Piloto Desconectado: ${driver.name} (ID: ${carId})`);
-                    activeDrivers.delete(carId);
+                    activeDrivers.delete(carId!);
                 } else {
-                    console.log(`👋 [ACSP] Coche Desconectado (ID: ${carId})`);
+                    console.log(`👋 [ACSP] Coche Desconectado (ID: ${carId}) ${name ? '- ' + name : ''}`);
                 }
                 break;
             }
@@ -163,26 +170,28 @@ server.on('message', (msg, rinfo) => {
                 const carId = reader.readUInt8();
                 const lapTime = reader.readUInt32LE();
                 const cuts = reader.readUInt8();
-                const carCount = reader.readUInt8();
                 
-                if (carId === null || lapTime === null || cuts === null) {
-                    console.warn('⚠️  Paquete LAP_COMPLETED truncado');
-                    break;
-                }
-
-                const driver = activeDrivers.get(carId);
-                const timeStr = (lapTime / 1000).toFixed(3);
+                const driver = activeDrivers.get(carId || -1);
+                const timeStr = lapTime ? (lapTime / 1000).toFixed(3) : '?.???';
                 
                 if (driver) {
-                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name}: ${timeStr}s (${cuts} cortes)`);
+                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ${driver.name}: ${timeStr}s (${cuts || 0} cortes)`);
                 } else {
-                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ID ${carId}: ${timeStr}s (${cuts} cortes)`);
+                    console.log(`${cuts === 0 ? '✅' : '❌'} [ACSP] Vuelta ID ${carId}: ${timeStr}s (${cuts || 0} cortes)`);
                 }
                 break;
             }
 
+            case 130:
+                console.log(`📊 [ACSP] Plugin Data (Tipo 130 - Realtime Update)`);
+                break;
+            
+            case 73:
+                console.log(`📈 [ACSP] Plugin Data (Tipo 73 - Telemetry Update)`);
+                break;
+
             default:
-                console.log(`❓ [ACSP] Paquete desconocido o no manejado: ${type}`);
+                console.log(`❓ [ACSP] Paquete desconocido: ${type}`);
         }
     } catch (err) {
         console.error('❌ Error procesando paquete:', err);

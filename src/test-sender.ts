@@ -5,58 +5,67 @@ const client = dgram.createSocket('udp4');
 const TARGET_PORT = 13000;
 const TARGET_HOST = '127.0.0.1';
 
-function createUTF16Buffer(str: string): Buffer {
-    const strBuf = Buffer.from(str, 'utf16le');
-    const lenBuf = Buffer.alloc(1);
-    lenBuf.writeUInt8(str.length, 0);
-    return Buffer.concat([lenBuf, strBuf]);
-}
-
 /**
- * Simula el formato de 4-bytes por char visto en los logs del usuario
+ * Crea un buffer de caracteres de 4 bytes (UTF-32LE) SIN byte de longitud al principio
  */
-function createPaddedBuffer(str: string): Buffer {
-    const lenBuf = Buffer.alloc(1);
-    lenBuf.writeUInt8(str.length, 0);
-    
+function createRawUTF32(str: string): Buffer {
     const dataBuf = Buffer.alloc(str.length * 4);
     for (let i = 0; i < str.length; i++) {
         dataBuf.writeUInt32LE(str.charCodeAt(i), i * 4);
     }
+    return dataBuf;
+}
+
+/**
+ * Crea un buffer con length (byte) y caracteres de 4 bytes
+ */
+function createUTF32WithLen(str: string): Buffer {
+    const lenBuf = Buffer.alloc(1);
+    lenBuf.writeUInt8(str.length, 0);
+    const dataBuf = createRawUTF32(str);
     return Buffer.concat([lenBuf, dataBuf]);
 }
 
-async function sendPoisonLap() {
-    console.log('Sending malformed LAP_COMPLETED (2 bytes)...');
-    client.send(Buffer.from([ACSP.LAP_COMPLETED, 0x01]), TARGET_PORT, TARGET_HOST);
+/**
+ * Crea un buffer con length (byte) y caracteres ASCII
+ */
+function createASCIIWithLen(str: string): Buffer {
+    const lenBuf = Buffer.alloc(1);
+    lenBuf.writeUInt8(str.length, 0);
+    const dataBuf = Buffer.from(str, 'ascii');
+    return Buffer.concat([lenBuf, dataBuf]);
 }
 
-async function sendPaddedCar() {
-    console.log('Sending NEW_CAR_CONNECTION with padded strings...');
+async function sendUserPacket() {
+    console.log('Sending exact 125-byte User Packet (Type 51)...');
+    
     const type = Buffer.from([ACSP.NEW_CAR_CONNECTION]);
     const carId = Buffer.from([4]);
-    
-    // Formato detectado: [carId][Padded Name][Padded Car][Padded Color][Normal Name]...
-    // Probamos con DriverName y GUID en formato padded
-    const carModel = createPaddedBuffer('ks_toyota_ae86');
-    const carSkin = createPaddedBuffer('white');
-    const driverName = createPaddedBuffer('Porx');
-    const driverTeam = createPaddedBuffer('None');
-    const guid = createPaddedBuffer('76561199230780195');
+    const driverName = createRawUTF32('Porx'); // SIN length byte
+    const guid = createUTF32WithLen('76561199230780195');
+    const unknown = Buffer.from([1]);
+    const carModel = createASCIIWithLen('ks_toyota_ae86_tuned');
+    const carSkin = createASCIIWithLen('05_white_carbon');
     
     const msg = Buffer.concat([
-        type, carId, carModel, carSkin, driverName, driverTeam, guid
+        type, carId, driverName, guid, unknown, carModel, carSkin
     ]);
     
+    console.log(`Total size: ${msg.length} bytes`);
     client.send(msg, TARGET_PORT, TARGET_HOST);
 }
 
+async function sendShortLap() {
+    console.log('Sending short LAP_COMPLETED (2 bytes)...');
+    client.send(Buffer.from([ACSP.LAP_COMPLETED, 0x01]), TARGET_PORT, TARGET_HOST);
+}
+
 setTimeout(async () => {
-    await sendPoisonLap();
+    await sendUserPacket();
     setTimeout(async () => {
-        await sendPaddedCar();
+        await sendShortLap();
         setTimeout(() => {
-            console.log('Poison tests sent.');
+            console.log('Verification packets sent.');
             client.close();
         }, 500);
     }, 500);
