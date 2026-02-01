@@ -65,9 +65,22 @@ async function sendLeaderboard() {
     
     const bestTime = Buffer.alloc(4);
     bestTime.writeUInt32LE(85430, 0); // 1:25.430
-    const carId = Buffer.from([4]);
+    const carId = Buffer.alloc(4);
+    carId.writeUInt32LE(4, 0); // Leaderboard normally uses 4 bytes for ID
     
     const msg = Buffer.concat([type, proto, time, count, bestTime, carId]);
+    client.send(msg, TARGET_PORT, TARGET_HOST);
+}
+
+async function sendLapCompleted() {
+    console.log('Sending LAP_COMPLETED...');
+    const type = Buffer.from([ACSP.LAP_COMPLETED]);
+    const carId = Buffer.from([4]);
+    const lapTime = Buffer.alloc(4);
+    lapTime.writeUInt32LE(86120, 0); // 1:26.120
+    const cuts = Buffer.from([0]);
+    
+    const msg = Buffer.concat([type, carId, lapTime, cuts]);
     client.send(msg, TARGET_PORT, TARGET_HOST);
 }
 
@@ -77,9 +90,12 @@ setTimeout(async () => {
         await sendNewCar();
         setTimeout(async () => {
             await sendLeaderboard();
-            setTimeout(() => {
-                console.log('Verificación enviada.');
-                client.close();
+            setTimeout(async () => {
+                await sendLapCompleted();
+                setTimeout(() => {
+                    console.log('Verificación enviada.');
+                    client.close();
+                }, 500);
             }, 500);
         }, 500);
     }, 500);

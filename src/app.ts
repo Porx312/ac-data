@@ -128,7 +128,7 @@ class SafeBufferReader {
 console.log('=== DEBUG: AC Server Admin Listener ===');
 
 server.on('error', (err) => {
-    console.error(`❌ Errror de Socket:\n${err.stack}`);
+    console.error(`❌ Error de Socket:\n${err.stack}`);
 });
 
 server.on('message', (msg, rinfo) => {
@@ -254,27 +254,33 @@ server.on('message', (msg, rinfo) => {
                 const carCount = reader.readUInt8();
                 
                 if (carCount !== null) {
-                    // console.log(`\n📈 [ACSP] Leaderboard Update (${carCount} coches)`);
+                    // console.log(`\n📈 [ACSP] Leaderboard Update (Sesión: ${sessionTime}ms, ${carCount} coches reportados)`);
                     
                     // HEURÍSTICA: Si detectamos el patrón extra de 2 bytes (0x13 0xXX) en el hex
-                    // Saltamos si después del count hay algo inusual antes de los timpos
+                    // Saltamos si después del count hay algo inusual antes de los tiempos
                     if (reader.getRemaining() > carCount * 8) {
                         reader.readUInt16LE(); 
                     }
 
-                    for (let i = 0; i < carCount; i++) {
+                    // Leemos todos los slots disponibles en el paquete
+                    while (reader.getRemaining() >= 8) {
                         const bestTime = reader.readUInt32LE();
                         const carId = reader.readUInt32LE();
                         
                         if (bestTime === null || carId === null) break;
                         
+                        // 0x3B9AC9FF es aprox 999,997,951ms (No-Time)
                         if (bestTime > 0 && bestTime < 999999999) {
                             const driver = activeDrivers.get(carId);
+                            const timeStr = (bestTime / 1000).toFixed(3);
+                            
                             if (driver) {
                                 if (!driver.bestLap || bestTime < driver.bestLap) {
                                     driver.bestLap = bestTime;
                                 }
-                                // console.log(`   🏆 Best Lap [${driver.name}]: ${(bestTime/1000).toFixed(3)}s`);
+                                console.log(`🏆 [RANK] Name: ${driver.name} | SteamID: ${driver.guid} | Track: ${currentTrack} | Server: ${currentServer} | BestTime: ${timeStr}s`);
+                            } else {
+                                console.log(`🏆 [RANK] ID: ${carId} | Track: ${currentTrack} | Server: ${currentServer} | BestTime: ${timeStr}s`);
                             }
                         }
                     }
