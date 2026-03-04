@@ -18,6 +18,8 @@ import {
   getBattleHistory,
 } from '../controller/recordsController.js';
 
+import { saveWebhookEvent } from '../controller/webhookController.js';
+
 const router = Router();
 
 // ─── Control AC Server ───
@@ -41,5 +43,8 @@ router.get('/records/track/:trackName/car/:carModel', getTrackCarLeaderboard);
 // ─── Touge Battles ───
 router.get('/records/battles/live', getLiveBattles);
 router.get('/records/battles/history', getBattleHistory);
+
+// ─── Webhooks / Server Events ───
+router.post('/webhook', saveWebhookEvent);
 
 export default router;

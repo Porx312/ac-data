@@ -14,4 +14,23 @@ const pool = mysql.createPool({
     queueLimit: 0,
 });
 
+
+export const initDB = async () => {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS server_events (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_name VARCHAR(255) NOT NULL,
+                webhook_url VARCHAR(255),
+                event_type VARCHAR(100),
+                metadata JSON,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log("✅ Base de datos verificada/inicializada (server_events).");
+    } catch (err) {
+        console.error("❌ Error inicializando la BD:", err);
+    }
+};
+
 export default pool;

@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import acServerRoutes from './routes/acServerRoutes.js';
+import { initDB } from './db.js';
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ const apiKeyMiddleware = (req: express.Request, res: express.Response, next: exp
 app.use('/ac-server', apiKeyMiddleware, acServerRoutes);
 
 // ------------------------ START SERVER ------------------------
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  await initDB();
   console.log(`API corriendo en http://localhost:${PORT}`);
 });
