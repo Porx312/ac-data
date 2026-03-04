@@ -11,7 +11,7 @@ const SERVERS_PATH = process.env.SERVERS_PATH;
 if (!SERVERS_PATH) throw new Error('SERVERS_PATH no definido en .env');
 
 // Registro en memoria de servidores activos
-const activeServers: Record<string, boolean> = {};
+const activeServers: Record<string, { pid: number } | undefined> = {};
 
 // ------------------------ SERVIDOR ------------------------
 
@@ -34,10 +34,13 @@ export const startServer = (req: Request, res: Response) => {
       stdio: 'inherit',
     });
 
-    server.unref();
-    activeServers[serverName] = true;
-
-    res.send(`Servidor ${serverName} iniciado`);
+    if (server.pid) {
+      server.unref();
+      activeServers[serverName] = { pid: server.pid };
+      res.send(`Servidor ${serverName} iniciado (PID: ${server.pid})`);
+    } else {
+      res.status(500).send('Error al obtener PID del proceso');
+    }
   } catch (err) {
     console.error(err);
     res.status(500).send('Error al iniciar AC Server');
@@ -48,23 +51,28 @@ export const stopServer = (req: Request, res: Response) => {
   const { serverName } = req.body;
   if (!serverName) return res.status(400).send('Se requiere serverName');
 
-  const serverPath = path.join(SERVERS_PATH, serverName, 'acServer.exe');
-  if (!fs.existsSync(serverPath)) return res.status(404).send('Servidor no existe');
+  const serverInfo = activeServers[serverName];
 
-  exec('tasklist | findstr acServer.exe', (err, stdout) => {
-    if (!stdout || !stdout.includes('acServer.exe')) {
-      activeServers[serverName] = false;
-      return res.send(`Servidor ${serverName} no estaba activo`);
+  if (!serverInfo || !serverInfo.pid) {
+    // Fallback? O simplemente decir que no está activo bajo nuestro control
+    // Riesgo: si reiniciaron el backend, perdemos los PIDs.
+    // Pero 'taskkill /IM' es destructivo. Mejor fallar seguro o limpiar manual.
+    // Podríamos intentar buscar por ruta si pudiéramos, pero tasklist no da path fácilmente en windows nativo sin wmic.
+    delete activeServers[serverName];
+    return res.status(404).send(`Servidor ${serverName} no parece estar activo (PID perdido).`);
+  }
+
+  // Usar /T para matar el árbol de procesos (cmd.exe -> acServer.exe)
+  exec(`taskkill /PID ${serverInfo.pid} /T /F`, (err, stdout) => {
+    if (err) {
+      console.error(err);
+      // Si falla, quizás ya no existe
+      delete activeServers[serverName];
+      return res.status(500).send(`Error o proceso ya terminado: ${err.message}`);
     }
 
-    exec('taskkill /IM acServer.exe /F', (err) => {
-      if (err) {
-        console.error(err);
-        return res.status(500).send('Error al detener AC Server');
-      }
-      activeServers[serverName] = false;
-      res.send(`Servidor ${serverName} detenido`);
-    });
+    delete activeServers[serverName];
+    res.send(`Servidor ${serverName} detenido (PID ${serverInfo.pid})`);
   });
 };
 
@@ -75,8 +83,7 @@ export const restartServer = (req: Request, res: Response) => {
   const serverPath = path.join(SERVERS_PATH, serverName, 'acServer.exe');
   if (!fs.existsSync(serverPath)) return res.status(404).send('Servidor no existe');
 
-  // Detener
-  exec('taskkill /IM acServer.exe /F', (err) => {
+  const stopAndStart = () => {
     // Arrancar de nuevo
     const acDir = path.dirname(serverPath);
     const server = spawn('cmd.exe', ['/c', `"${serverPath}"`], {
@@ -85,24 +92,48 @@ export const restartServer = (req: Request, res: Response) => {
       detached: true,
       stdio: 'inherit',
     });
-    server.unref();
-    activeServers[serverName] = true;
 
-    res.send(`Servidor ${serverName} reiniciado`);
-  });
+    if (server.pid) {
+      server.unref();
+      activeServers[serverName] = { pid: server.pid };
+      res.send(`Servidor ${serverName} reiniciado (New PID: ${server.pid})`);
+    } else {
+      res.status(500).send('Servidor reiniciado pero falló obtención de PID');
+    }
+  };
+
+  const serverInfo = activeServers[serverName];
+  if (serverInfo && serverInfo.pid) {
+    exec(`taskkill /PID ${serverInfo.pid} /T /F`, (err) => {
+      if (err) console.error("Error deteniendo anterior:", err);
+      delete activeServers[serverName];
+      // Pequeño delay para asegurar liberación de recursos/puertos
+      setTimeout(stopAndStart, 1000);
+    });
+  } else {
+    // No estaba corriendo o no teníamos PID
+    stopAndStart();
+  }
 };
 
 export const serverStatus = (req: Request, res: Response) => {
   const { serverName } = req.body;
   if (!serverName) return res.status(400).send('Se requiere serverName');
 
-  exec('tasklist | findstr acServer.exe', (err, stdout) => {
-    if (stdout && stdout.includes('acServer.exe')) {
-      res.send(`Servidor ${serverName} está activo`);
-    } else {
-      res.send(`Servidor ${serverName} NO está activo`);
-    }
-  });
+  const serverInfo = activeServers[serverName];
+  if (serverInfo && serverInfo.pid) {
+    exec(`tasklist /FI "PID eq ${serverInfo.pid}"`, (err, stdout) => {
+      if (stdout && stdout.includes(serverInfo.pid.toString())) {
+        res.send(`Servidor ${serverName} está activo (PID ${serverInfo.pid})`);
+      } else {
+        // PID no encontrado, limpiar
+        delete activeServers[serverName];
+        res.send(`Servidor ${serverName} NO está activo (PID ${serverInfo.pid} no encontrado)`);
+      }
+    });
+  } else {
+    res.send(`Servidor ${serverName} NO está registrado como activo`);
+  }
 };
 
 // ------------------------ CONFIGURACIÓN ------------------------
