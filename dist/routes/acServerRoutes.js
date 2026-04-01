@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { startServer, stopServer, restartServer, serverStatus, setPassword, setTrack, } from '../controller/controller.js';
 import { getDriverRecords, getTrackLeaderboard, getTrackCarLeaderboard, getDriverTrackRecords, getAvailableTracks, getDrivers, getLiveBattles, getBattleHistory, } from '../controller/recordsController.js';
+import { saveWebhookEvent } from '../controller/webhookController.js';
 const router = Router();
 // ─── Control AC Server ───
 router.post('/start', startServer);
@@ -20,5 +21,7 @@ router.get('/records/track/:trackName/car/:carModel', getTrackCarLeaderboard);
 // ─── Touge Battles ───
 router.get('/records/battles/live', getLiveBattles);
 router.get('/records/battles/history', getBattleHistory);
+// ─── Webhooks / Server Events ───
+router.post('/webhook', saveWebhookEvent);
 export default router;
 //# sourceMappingURL=acServerRoutes.js.map

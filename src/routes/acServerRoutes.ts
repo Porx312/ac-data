@@ -4,8 +4,7 @@ import {
   stopServer,
   restartServer,
   serverStatus,
-  setPassword,
-  setTrack,
+  configureServer,
 } from '../controller/controller.js';
 import {
   getDriverRecords,
@@ -18,7 +17,7 @@ import {
   getBattleHistory,
 } from '../controller/recordsController.js';
 
-import { saveWebhookEvent } from '../controller/webhookController.js';
+import { saveWebhookEvent, saveBattleWebhook, receiveServerEvent } from '../controller/webhookController.js';
 
 const router = Router();
 
@@ -29,8 +28,7 @@ router.post('/restart', restartServer);
 router.post('/status', serverStatus);
 
 // ─── Configuración del servidor ───
-router.post('/password', setPassword);
-router.post('/track', setTrack);
+router.post('/configuration-server', configureServer);
 
 // ─── Records / Leaderboards ───
 router.get('/records/drivers', getDrivers);
@@ -46,5 +44,7 @@ router.get('/records/battles/history', getBattleHistory);
 
 // ─── Webhooks / Server Events ───
 router.post('/webhook', saveWebhookEvent);
+router.post('/battles/webhook', saveBattleWebhook);
+router.post('/server-event', receiveServerEvent);
 
 export default router;

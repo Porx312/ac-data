@@ -206,7 +206,13 @@ export const getLiveBattles = async (_req, res) => {
              LEFT JOIN drivers d2 ON tb.player2_steam_id = d2.steam_id
              WHERE tb.status = "active"
              ORDER BY tb.started_at DESC`);
-        res.json({ activeBattles: rows.length, battles: rows });
+        const battles = rows.map(r => ({
+            ...r,
+            trackConfig: r.track_config,
+            player1Car: r.player1_car,
+            player2Car: r.player2_car
+        }));
+        res.json({ activeBattles: battles.length, battles });
     }
     catch (err) {
         console.error('Error getLiveBattles:', err);
@@ -231,7 +237,13 @@ export const getBattleHistory = async (req, res) => {
              WHERE tb.status = "finished"
              ORDER BY tb.updated_at DESC
              LIMIT ?`, [limit]);
-        res.json({ totalBattles: rows.length, battles: rows });
+        const battles = rows.map(r => ({
+            ...r,
+            trackConfig: r.track_config,
+            player1Car: r.player1_car,
+            player2Car: r.player2_car
+        }));
+        res.json({ totalBattles: battles.length, battles });
     }
     catch (err) {
         console.error('Error getBattleHistory:', err);

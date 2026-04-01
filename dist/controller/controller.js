@@ -7,8 +7,28 @@ dotenv.config();
 const SERVERS_PATH = process.env.SERVERS_PATH;
 if (!SERVERS_PATH)
     throw new Error('SERVERS_PATH no definido en .env');
-// Registro en memoria de servidores activos
-const activeServers = {};
+// Registro persistente de servidores activos
+const PIDS_FILE = path.join(process.cwd(), 'server_pids.json');
+const loadPids = () => {
+    try {
+        if (fs.existsSync(PIDS_FILE)) {
+            return JSON.parse(fs.readFileSync(PIDS_FILE, 'utf-8'));
+        }
+    }
+    catch (err) {
+        console.error("Error cargando PIDs:", err);
+    }
+    return {};
+};
+const savePids = () => {
+    try {
+        fs.writeFileSync(PIDS_FILE, JSON.stringify(activeServers, null, 2), 'utf-8');
+    }
+    catch (err) {
+        console.error("Error guardando PIDs:", err);
+    }
+};
+const activeServers = loadPids();
 // ------------------------ SERVIDOR ------------------------
 export const startServer = (req, res) => {
     const { serverName } = req.body;
@@ -31,6 +51,7 @@ export const startServer = (req, res) => {
         if (server.pid) {
             server.unref();
             activeServers[serverName] = { pid: server.pid };
+            savePids();
             res.send(`Servidor ${serverName} iniciado (PID: ${server.pid})`);
         }
         else {
@@ -48,22 +69,29 @@ export const stopServer = (req, res) => {
         return res.status(400).send('Se requiere serverName');
     const serverInfo = activeServers[serverName];
     if (!serverInfo || !serverInfo.pid) {
-        // Fallback? O simplemente decir que no está activo bajo nuestro control
-        // Riesgo: si reiniciaron el backend, perdemos los PIDs.
-        // Pero 'taskkill /IM' es destructivo. Mejor fallar seguro o limpiar manual.
-        // Podríamos intentar buscar por ruta si pudiéramos, pero tasklist no da path fácilmente en windows nativo sin wmic.
+        // Si no teníamos idea de la ID (por un backend crash) y el dev trata de pararlo
         delete activeServers[serverName];
-        return res.status(404).send(`Servidor ${serverName} no parece estar activo (PID perdido).`);
+        savePids();
+        return res.status(404).send(`Servidor ${serverName} no parece estar activo (PID perdido o nunca guardado).`);
     }
     // Usar /T para matar el árbol de procesos (cmd.exe -> acServer.exe)
     exec(`taskkill /PID ${serverInfo.pid} /T /F`, (err, stdout) => {
         if (err) {
             console.error(err);
-            // Si falla, quizás ya no existe
+            // Limpiamos de la memoria porque ya sabemos que el proceso murió o desapareció
             delete activeServers[serverName];
-            return res.status(500).send(`Error o proceso ya terminado: ${err.message}`);
+            savePids();
+            // Si el error es simplemente 'proceso no encontrado', enviarlo como un Success a la UI
+            // para no bloquear al usuario y destrabar la máquina de estados.
+            if (err.message.includes('not found') || err.message.includes('no encontrado')) {
+                return res.status(200).send(`El proceso ya no existía en el sistema operativo. Hemos desconectado limpio a ${serverName}.`);
+            }
+            else {
+                return res.status(500).send(`Error deteniendo proceso (borrado de base de datos): ${err.message}`);
+            }
         }
         delete activeServers[serverName];
+        savePids();
         res.send(`Servidor ${serverName} detenido (PID ${serverInfo.pid})`);
     });
 };
@@ -86,6 +114,7 @@ export const restartServer = (req, res) => {
         if (server.pid) {
             server.unref();
             activeServers[serverName] = { pid: server.pid };
+            savePids();
             res.send(`Servidor ${serverName} reiniciado (New PID: ${server.pid})`);
         }
         else {
@@ -96,8 +125,9 @@ export const restartServer = (req, res) => {
     if (serverInfo && serverInfo.pid) {
         exec(`taskkill /PID ${serverInfo.pid} /T /F`, (err) => {
             if (err)
-                console.error("Error deteniendo anterior:", err);
+                console.error("Error deteniendo anterior (quizás ya muert0):", err);
             delete activeServers[serverName];
+            savePids();
             // Pequeño delay para asegurar liberación de recursos/puertos
             setTimeout(stopAndStart, 1000);
         });
@@ -120,6 +150,7 @@ export const serverStatus = (req, res) => {
             else {
                 // PID no encontrado, limpiar
                 delete activeServers[serverName];
+                savePids();
                 res.send(`Servidor ${serverName} NO está activo (PID ${serverInfo.pid} no encontrado)`);
             }
         });
