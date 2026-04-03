@@ -1,0 +1,2 @@
+-- IF NOT EXISTS: idempotente si el script Python ya creó el mismo índice
+CREATE UNIQUE INDEX IF NOT EXISTS "lap_records_unique_lap" ON "lap_records" USING btree ("steam_id","car_model","track","track_config");

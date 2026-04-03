@@ -42,15 +42,80 @@ function configFingerprint(row: typeof acServerControl.$inferSelect): string {
     });
 }
 
+/** Campos de server_cfg distintos de CONFIG_TRACK (variante de circuito). */
 function hasConfigFields(row: typeof acServerControl.$inferSelect): boolean {
     return (
         row.displayName != null ||
         row.password != null ||
         row.track != null ||
-        row.configTrack != null ||
         row.maxClients != null ||
         (row.entries != null && Array.isArray(row.entries) && row.entries.length > 0)
     );
+}
+
+function parsePrevConfigFp(prev: { configFp: string }): {
+    d: unknown;
+    p: unknown;
+    t: unknown;
+    c: unknown;
+    m: unknown;
+    e: unknown;
+} | null {
+    try {
+        return JSON.parse(prev.configFp) as {
+            d: unknown;
+            p: unknown;
+            t: unknown;
+            c: unknown;
+            m: unknown;
+            e: unknown;
+        };
+    } catch {
+        return null;
+    }
+}
+
+/** true si solo cambió config_track (p. ej. quitar akina_downhill) u otro campo de config. */
+function configTrackChangedFromPrev(
+    prev: { configFp: string } | undefined,
+    row: typeof acServerControl.$inferSelect,
+): boolean {
+    if (!prev) return false;
+    const o = parsePrevConfigFp(prev);
+    if (!o) return false;
+    return JSON.stringify(o.c) !== JSON.stringify(row.configTrack ?? null);
+}
+
+/**
+ * Variante de circuito en server_cfg.ini: no es el TRACK.
+ * null, '', espacios o 'default' → CONFIG_TRACK vacío (sin layout / default del juego).
+ */
+function normalizeConfigTrack(raw: string | null | undefined): string {
+    if (raw == null) return '';
+    const s = raw.trim();
+    if (s === '' || s.toLowerCase() === 'default') return '';
+    return s;
+}
+
+function shouldApplyServerConfig(
+    row: typeof acServerControl.$inferSelect,
+    key: string,
+): boolean {
+    const prev = lastSnapshot.get(key);
+    if (hasConfigFields(row)) return true;
+    if (configTrackChangedFromPrev(prev, row)) return true;
+    /* Primera vez en el poller: solo config_track en la fila (p. ej. akina_downhill). */
+    if (!prev && normalizeConfigTrack(row.configTrack) !== '') return true;
+    return false;
+}
+
+function shouldWriteConfigTrack(
+    prev: { configFp: string } | undefined,
+    row: typeof acServerControl.$inferSelect,
+): boolean {
+    if (configTrackChangedFromPrev(prev, row)) return true;
+    const n = normalizeConfigTrack(row.configTrack);
+    return n !== '';
 }
 
 async function setLastDailyRestartAt(row: typeof acServerControl.$inferSelect, at: Date): Promise<void> {
@@ -94,12 +159,18 @@ async function maybeDailyRotationRestart(row: typeof acServerControl.$inferSelec
     }
 }
 
-function rowToPayload(row: typeof acServerControl.$inferSelect): ServerConfigPayload {
+function rowToPayload(
+    row: typeof acServerControl.$inferSelect,
+    key: string,
+): ServerConfigPayload {
+    const prev = lastSnapshot.get(key);
     const payload: ServerConfigPayload = {};
     if (row.displayName != null) payload.displayName = row.displayName;
     if (row.password != null) payload.password = row.password;
     if (row.track != null) payload.track = row.track;
-    if (row.configTrack !== null && row.configTrack !== undefined) payload.configTrack = row.configTrack;
+    if (shouldWriteConfigTrack(prev, row)) {
+        payload.configTrack = normalizeConfigTrack(row.configTrack);
+    }
     if (row.maxClients != null) payload.maxClients = row.maxClients;
     if (row.entries != null && row.entries.length > 0) payload.entries = row.entries;
     return payload;
@@ -115,8 +186,8 @@ async function processRow(row: typeof acServerControl.$inferSelect): Promise<voi
     const configChanged = prev === undefined || fp !== prev.configFp;
     const powerChanged = prev === undefined || power !== prev.power;
 
-    if (configChanged && hasConfigFields(row)) {
-        const result = applyServerConfiguration(name, rowToPayload(row));
+    if (configChanged && shouldApplyServerConfig(row, key)) {
+        const result = applyServerConfiguration(name, rowToPayload(row, key));
         if (!result.ok) {
             console.error(`[server-control] ${name} config:`, result.reason);
         } else if (result.modifications.length > 0) {

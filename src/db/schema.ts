@@ -8,6 +8,7 @@ import {
     primaryKey,
     text,
     timestamp,
+    uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 export const serverEvents = pgTable('server_events', {
@@ -37,18 +38,25 @@ export const serverBattles = pgTable('server_battles', {
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
-export const lapRecords = pgTable('lap_records', {
-    id: integer('id').primaryKey(),
-    steamId: text('steam_id').notNull(),
-    carModel: text('car_model').notNull(),
-    track: text('track').notNull(),
-    trackConfig: text('track_config'),
-    serverName: text('server_name'),
-    lapTime: integer('lap_time').notNull(),
-    validLap: integer('valid_lap').notNull(),
-    timestamp: bigint('timestamp', { mode: 'number' }),
-    date: text('date'),
-});
+/** Mejor tiempo por combinación circuito/coche (telemetría Python + migración MySQL usan ON CONFLICT aquí). */
+export const lapRecords = pgTable(
+    'lap_records',
+    {
+        id: integer('id').primaryKey(),
+        steamId: text('steam_id').notNull(),
+        carModel: text('car_model').notNull(),
+        track: text('track').notNull(),
+        trackConfig: text('track_config'),
+        serverName: text('server_name'),
+        lapTime: integer('lap_time').notNull(),
+        validLap: integer('valid_lap').notNull(),
+        timestamp: bigint('timestamp', { mode: 'number' }),
+        date: text('date'),
+    },
+    (t) => [
+        uniqueIndex('lap_records_unique_lap').on(t.steamId, t.carModel, t.track, t.trackConfig),
+    ],
+);
 
 export const drivers = pgTable('drivers', {
     steamId: text('steam_id').primaryKey(),
