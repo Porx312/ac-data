@@ -1,306 +1,244 @@
-import { Request, Response } from 'express';
 import { spawn, exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 
-// Cargar variables de entorno
 dotenv.config();
 
-const SERVERS_PATH = process.env.SERVERS_PATH;
-if (!SERVERS_PATH) throw new Error('SERVERS_PATH no definido en .env');
+const _serversPath = process.env.SERVERS_PATH;
+if (!_serversPath) throw new Error('SERVERS_PATH no definido en .env');
+const SERVERS_PATH: string = _serversPath;
 
-// Registro persistente de servidores activos
 const PIDS_FILE = path.join(process.cwd(), 'server_pids.json');
 
 const loadPids = (): Record<string, { pid: number } | undefined> => {
-  try {
-    if (fs.existsSync(PIDS_FILE)) {
-      return JSON.parse(fs.readFileSync(PIDS_FILE, 'utf-8'));
+    try {
+        if (fs.existsSync(PIDS_FILE)) {
+            return JSON.parse(fs.readFileSync(PIDS_FILE, 'utf-8'));
+        }
+    } catch (err) {
+        console.error('Error cargando PIDs:', err);
     }
-  } catch (err) {
-    console.error("Error cargando PIDs:", err);
-  }
-  return {};
+    return {};
 };
 
 const savePids = () => {
-  try {
-    fs.writeFileSync(PIDS_FILE, JSON.stringify(activeServers, null, 2), 'utf-8');
-  } catch (err) {
-    console.error("Error guardando PIDs:", err);
-  }
-};
-
-const activeServers: Record<string, { pid: number } | undefined> = loadPids();
-
-// ------------------------ SERVIDOR ------------------------
-
-export const startServer = (req: Request, res: Response) => {
-  const { serverName } = req.body;
-  if (!serverName) return res.status(400).send('Se requiere serverName');
-
-  const serverPath = path.join(SERVERS_PATH, serverName, 'acServer.exe');
-  if (!fs.existsSync(serverPath)) return res.status(404).send('El servidor no existe');
-
-  // Verificar si ya está activo
-  if (activeServers[serverName]) return res.status(403).send('Servidor ya está activo');
-
-  try {
-    const acDir = path.dirname(serverPath);
-    const server = spawn('cmd.exe', ['/c', `"${serverPath}"`], {
-      cwd: acDir,
-      shell: true,
-      detached: true,
-      stdio: 'inherit',
-    });
-
-    if (server.pid) {
-      server.unref();
-      activeServers[serverName] = { pid: server.pid };
-      savePids();
-      res.send(`Servidor ${serverName} iniciado (PID: ${server.pid})`);
-    } else {
-      res.status(500).send('Error al obtener PID del proceso');
+    try {
+        fs.writeFileSync(PIDS_FILE, JSON.stringify(activeServers, null, 2), 'utf-8');
+    } catch (err) {
+        console.error('Error guardando PIDs:', err);
     }
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error al iniciar AC Server');
-  }
 };
 
-export const stopServer = (req: Request, res: Response) => {
-  const { serverName } = req.body;
-  if (!serverName) return res.status(400).send('Se requiere serverName');
+export const activeServers: Record<string, { pid: number } | undefined> = loadPids();
 
-  const serverInfo = activeServers[serverName];
+export type ServerConfigPayload = {
+    displayName?: string;
+    password?: string;
+    track?: string;
+    configTrack?: string | null;
+    maxClients?: number;
+    entries?: Array<{ model: string; skin?: string; count?: number }>;
+};
 
-  if (!serverInfo || !serverInfo.pid) {
-    // Si no teníamos idea de la ID (por un backend crash) y el dev trata de pararlo
-    delete activeServers[serverName];
-    savePids();
-    return res.status(404).send(`Servidor ${serverName} no parece estar activo (PID perdido o nunca guardado).`);
-  }
+/** Escribe server_cfg.ini / entry_list.ini según payload (misma lógica que la antigua API). */
+export function applyServerConfiguration(
+    serverName: string,
+    payload: ServerConfigPayload,
+): { ok: true; modifications: string[] } | { ok: false; reason: string } {
+    const {
+        displayName,
+        password,
+        track,
+        configTrack,
+        maxClients,
+        entries,
+    } = payload;
 
-  // Usar /T para matar el árbol de procesos (cmd.exe -> acServer.exe)
-  exec(`taskkill /PID ${serverInfo.pid} /T /F`, (err, stdout) => {
-    if (err) {
-      console.error(err);
-      // Limpiamos de la memoria porque ya sabemos que el proceso murió o desapareció
-      delete activeServers[serverName];
-      savePids();
+    const cfgPath = path.join(SERVERS_PATH, serverName, 'cfg', 'server_cfg.ini');
+    const entryListPath = path.join(SERVERS_PATH, serverName, 'cfg', 'entry_list.ini');
 
-      // Si el error es simplemente 'proceso no encontrado', enviarlo como un Success a la UI
-      // para no bloquear al usuario y destrabar la máquina de estados.
-      if (err.message.includes('not found') || err.message.includes('no encontrado')) {
-        return res.status(200).send(`El proceso ya no existía en el sistema operativo. Hemos desconectado limpio a ${serverName}.`);
-      } else {
-        return res.status(500).send(`Error deteniendo proceso (borrado de base de datos): ${err.message}`);
-      }
+    if (!fs.existsSync(cfgPath)) {
+        return { ok: false, reason: `server_cfg.ini no existe para ${serverName}` };
     }
 
-    delete activeServers[serverName];
-    savePids();
-    res.send(`Servidor ${serverName} detenido (PID ${serverInfo.pid})`);
-  });
-};
-
-export const restartServer = (req: Request, res: Response) => {
-  const { serverName } = req.body;
-  if (!serverName) return res.status(400).send('Se requiere serverName');
-
-  const serverPath = path.join(SERVERS_PATH, serverName, 'acServer.exe');
-  if (!fs.existsSync(serverPath)) return res.status(404).send('Servidor no existe');
-
-  const stopAndStart = () => {
-    // Arrancar de nuevo
-    const acDir = path.dirname(serverPath);
-    const server = spawn('cmd.exe', ['/c', `"${serverPath}"`], {
-      cwd: acDir,
-      shell: true,
-      detached: true,
-      stdio: 'inherit',
-    });
-
-    if (server.pid) {
-      server.unref();
-      activeServers[serverName] = { pid: server.pid };
-      savePids();
-      res.send(`Servidor ${serverName} reiniciado (New PID: ${server.pid})`);
-    } else {
-      res.status(500).send('Servidor reiniciado pero falló obtención de PID');
-    }
-  };
-
-  const serverInfo = activeServers[serverName];
-  if (serverInfo && serverInfo.pid) {
-    exec(`taskkill /PID ${serverInfo.pid} /T /F`, (err) => {
-      if (err) console.error("Error deteniendo anterior (quizás ya muert0):", err);
-      delete activeServers[serverName];
-      savePids();
-      // Pequeño delay para asegurar liberación de recursos/puertos
-      setTimeout(stopAndStart, 1000);
-    });
-  } else {
-    // No estaba corriendo o no teníamos PID
-    stopAndStart();
-  }
-};
-
-export const serverStatus = (req: Request, res: Response) => {
-  const { serverName } = req.body;
-  if (!serverName) return res.status(400).send('Se requiere serverName');
-
-  const serverInfo = activeServers[serverName];
-  if (serverInfo && serverInfo.pid) {
-    exec(`tasklist /FI "PID eq ${serverInfo.pid}"`, (err, stdout) => {
-      if (stdout && stdout.includes(serverInfo.pid.toString())) {
-        res.send(`Servidor ${serverName} está activo (PID ${serverInfo.pid})`);
-      } else {
-        // PID no encontrado, limpiar
-        delete activeServers[serverName];
-        savePids();
-        res.send(`Servidor ${serverName} NO está activo (PID ${serverInfo.pid} no encontrado)`);
-      }
-    });
-  } else {
-    res.send(`Servidor ${serverName} NO está registrado como activo`);
-  }
-};
-
-
-
-// ------------------------ CONFIGURACIÓN ------------------------
-export const configureServer = (req: Request, res: Response) => {
-  const { serverName, password, track, configTrack, maxClients, entries, displayName } = req.body;
-
-  if (!serverName) {
-    return res.status(400).send('serverName es requerido');
-  }
-
-  const cfgPath = path.join(
-    SERVERS_PATH!,
-    serverName,
-    'cfg',
-    'server_cfg.ini'
-  );
-
-  const entryListPath = path.join(
-    SERVERS_PATH!,
-    serverName,
-    'cfg',
-    'entry_list.ini'
-  );
-
-  if (!fs.existsSync(cfgPath)) {
-    return res.status(404).send('server_cfg.ini no existe para este servidor');
-  }
-
-  try {
-    let content = fs.readFileSync(cfgPath, 'utf-8');
     const modifications: string[] = [];
 
-    // Actualizar Nombre Visual (NAME)
-    if (displayName !== undefined) {
-      if (/^NAME=.*/m.test(content)) {
-        content = content.replace(/^NAME=.*/m, `NAME=${displayName}`);
-      } else {
-        content += `\nNAME=${displayName}`;
-      }
-      modifications.push('displayName (NAME)');
-    }
+    try {
+        let content = fs.readFileSync(cfgPath, 'utf-8');
 
-    // Actualizar Password
-    if (password !== undefined) {
-      if (/^PASSWORD=.*/m.test(content)) {
-        content = content.replace(/^PASSWORD=.*/m, `PASSWORD=${password}`);
-      } else {
-        content += `\nPASSWORD=${password}`;
-      }
-      modifications.push('password');
-    }
-
-    // Actualizar Track
-    if (track !== undefined) {
-      if (/^TRACK=.*/m.test(content)) {
-        content = content.replace(/^TRACK=.*/m, `TRACK=${track}`);
-      } else {
-        content += `\nTRACK=${track}`;
-      }
-      modifications.push('track');
-    }
-
-    // Actualizar Config Track
-    if (configTrack !== undefined) {
-      const value = configTrack ?? ''; // si es undefined o null → ''
-
-      if (/^CONFIG_TRACK=.*/m.test(content)) {
-        content = content.replace(
-          /^CONFIG_TRACK=.*/m,
-          `CONFIG_TRACK=${value}`
-        );
-      } else {
-        content += `\nCONFIG_TRACK=${value}`;
-      }
-
-      modifications.push('configTrack');
-    }
-
-
-    // Actualizar Max Clients
-    if (maxClients !== undefined) {
-      if (/^MAX_CLIENTS=.*/m.test(content)) {
-        content = content.replace(/^MAX_CLIENTS=.*/m, `MAX_CLIENTS=${maxClients}`);
-      } else {
-        content += `\nMAX_CLIENTS=${maxClients}`;
-      }
-      modifications.push('maxClients');
-    }
-
-    // Procesar Entries (CARS y entry_list.ini)
-    if (entries && Array.isArray(entries)) {
-      // 1. Extraer modelos únicos para CARS en server_cfg.ini
-      const models = entries.map((e: any) => e.model);
-      const uniqueModels = [...new Set(models)].join(';');
-
-      if (/^CARS=.*/m.test(content)) {
-        content = content.replace(/^CARS=.*/m, `CARS=${uniqueModels}`);
-      } else {
-        content += `\nCARS=${uniqueModels}`;
-      }
-      modifications.push('cars (server_cfg.ini)');
-
-      // 2. Generar entry_list.ini
-      let entryListContent = '';
-      let carIndex = 0;
-      for (const entry of entries) {
-        const count = entry.count || 1;
-        for (let i = 0; i < count; i++) {
-          entryListContent += `[CAR_${carIndex}]\n`;
-          entryListContent += `MODEL=${entry.model}\n`;
-          entryListContent += `SKIN=${entry.skin || '0_default'}\n`;
-          entryListContent += `SPECTATOR_MODE=0\n`;
-          entryListContent += `DRIVERNAME=\n`;
-          entryListContent += `TEAM=\n`;
-          entryListContent += `GUID=\n`;
-          entryListContent += `BALLAST=0\n`;
-          entryListContent += `RESTRICTOR=0\n\n`;
-          carIndex++;
+        if (displayName !== undefined) {
+            if (/^NAME=.*/m.test(content)) {
+                content = content.replace(/^NAME=.*/m, `NAME=${displayName}`);
+            } else {
+                content += `\nNAME=${displayName}`;
+            }
+            modifications.push('displayName (NAME)');
         }
-      }
-      fs.writeFileSync(entryListPath, entryListContent, 'utf-8');
-      modifications.push('entry_list.ini (regenerated)');
+
+        if (password !== undefined) {
+            if (/^PASSWORD=.*/m.test(content)) {
+                content = content.replace(/^PASSWORD=.*/m, `PASSWORD=${password}`);
+            } else {
+                content += `\nPASSWORD=${password}`;
+            }
+            modifications.push('password');
+        }
+
+        if (track !== undefined) {
+            if (/^TRACK=.*/m.test(content)) {
+                content = content.replace(/^TRACK=.*/m, `TRACK=${track}`);
+            } else {
+                content += `\nTRACK=${track}`;
+            }
+            modifications.push('track');
+        }
+
+        if (configTrack !== undefined) {
+            const value = configTrack ?? '';
+            if (/^CONFIG_TRACK=.*/m.test(content)) {
+                content = content.replace(/^CONFIG_TRACK=.*/m, `CONFIG_TRACK=${value}`);
+            } else {
+                content += `\nCONFIG_TRACK=${value}`;
+            }
+            modifications.push('configTrack');
+        }
+
+        if (maxClients !== undefined) {
+            if (/^MAX_CLIENTS=.*/m.test(content)) {
+                content = content.replace(/^MAX_CLIENTS=.*/m, `MAX_CLIENTS=${maxClients}`);
+            } else {
+                content += `\nMAX_CLIENTS=${maxClients}`;
+            }
+            modifications.push('maxClients');
+        }
+
+        if (entries && Array.isArray(entries)) {
+            const models = entries.map((e: { model: string }) => e.model);
+            const uniqueModels = [...new Set(models)].join(';');
+
+            if (/^CARS=.*/m.test(content)) {
+                content = content.replace(/^CARS=.*/m, `CARS=${uniqueModels}`);
+            } else {
+                content += `\nCARS=${uniqueModels}`;
+            }
+            modifications.push('cars (server_cfg.ini)');
+
+            let entryListContent = '';
+            let carIndex = 0;
+            for (const entry of entries) {
+                const count = entry.count || 1;
+                for (let i = 0; i < count; i++) {
+                    entryListContent += `[CAR_${carIndex}]\n`;
+                    entryListContent += `MODEL=${entry.model}\n`;
+                    entryListContent += `SKIN=${entry.skin || '0_default'}\n`;
+                    entryListContent += `SPECTATOR_MODE=0\n`;
+                    entryListContent += `DRIVERNAME=\n`;
+                    entryListContent += `TEAM=\n`;
+                    entryListContent += `GUID=\n`;
+                    entryListContent += `BALLAST=0\n`;
+                    entryListContent += `RESTRICTOR=0\n\n`;
+                    carIndex++;
+                }
+            }
+            fs.writeFileSync(entryListPath, entryListContent, 'utf-8');
+            modifications.push('entry_list.ini (regenerated)');
+        }
+
+        if (modifications.length === 0) {
+            return { ok: true, modifications: [] };
+        }
+
+        fs.writeFileSync(cfgPath, content, 'utf-8');
+        return { ok: true, modifications };
+    } catch (err) {
+        console.error(err);
+        return { ok: false, reason: String(err) };
+    }
+}
+
+export function startServerCore(serverName: string): { ok: boolean; message: string } {
+    const serverPath = path.join(SERVERS_PATH, serverName, 'acServer.exe');
+    if (!fs.existsSync(serverPath)) {
+        return { ok: false, message: `El servidor no existe: ${serverName}` };
     }
 
-    if (modifications.length === 0) {
-      return res.status(400).send('No se proporcionaron campos para actualizar');
+    if (activeServers[serverName]) {
+        return { ok: false, message: `Servidor ${serverName} ya está activo` };
     }
 
-    fs.writeFileSync(cfgPath, content, 'utf-8');
-    res.send(`Configuración actualizada en ${serverName}: ${modifications.join(', ')}`);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error al actualizar la configuración del servidor');
-  }
-};
+    try {
+        const acDir = path.dirname(serverPath);
+        const server = spawn('cmd.exe', ['/c', `"${serverPath}"`], {
+            cwd: acDir,
+            shell: true,
+            detached: true,
+            stdio: 'inherit',
+        });
 
+        if (server.pid) {
+            server.unref();
+            activeServers[serverName] = { pid: server.pid };
+            savePids();
+            return { ok: true, message: `Servidor ${serverName} iniciado (PID: ${server.pid})` };
+        }
+        return { ok: false, message: 'Error al obtener PID del proceso' };
+    } catch (err) {
+        console.error(err);
+        return { ok: false, message: 'Error al iniciar AC Server' };
+    }
+}
+
+function execAsync(cmd: string): Promise<{ stdout: string; err?: Error }> {
+    return new Promise((resolve) => {
+        exec(cmd, (err, stdout) => {
+            const out = stdout ?? '';
+            if (err) resolve({ stdout: out, err: err as Error });
+            else resolve({ stdout: out });
+        });
+    });
+}
+
+export async function stopServerCore(serverName: string): Promise<{ ok: boolean; message: string }> {
+    const serverInfo = activeServers[serverName];
+
+    if (!serverInfo?.pid) {
+        delete activeServers[serverName];
+        savePids();
+        return { ok: false, message: `Servidor ${serverName} no estaba activo` };
+    }
+
+    const pid = serverInfo.pid;
+    const { err } = await execAsync(`taskkill /PID ${pid} /T /F`);
+
+    delete activeServers[serverName];
+    savePids();
+
+    if (err) {
+        if (err.message.includes('not found') || err.message.includes('no encontrado')) {
+            return { ok: true, message: `Proceso ya no existía; ${serverName} desmarcado.` };
+        }
+        return { ok: false, message: err.message };
+    }
+
+    return { ok: true, message: `Servidor ${serverName} detenido (PID ${pid})` };
+}
+
+export async function restartServerCore(serverName: string): Promise<{ ok: boolean; message: string }> {
+    const serverPath = path.join(SERVERS_PATH, serverName, 'acServer.exe');
+    if (!fs.existsSync(serverPath)) {
+        return { ok: false, message: 'Servidor no existe' };
+    }
+
+    const serverInfo = activeServers[serverName];
+    if (serverInfo?.pid) {
+        await execAsync(`taskkill /PID ${serverInfo.pid} /T /F`);
+        delete activeServers[serverName];
+        savePids();
+    }
+
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const start = startServerCore(serverName);
+    return { ok: start.ok, message: start.message };
+}

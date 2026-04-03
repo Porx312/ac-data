@@ -1,5 +1,9 @@
-import mysql from 'mysql2/promise';
-declare const pool: mysql.Pool;
+import { Pool } from 'pg';
+import * as schema from './db/schema.js';
+declare const pool: Pool;
+export declare const db: import("drizzle-orm/node-postgres").NodePgDatabase<typeof schema> & {
+    $client: Pool;
+};
+export { pool };
 export declare const initDB: () => Promise<void>;
-export default pool;
 //# sourceMappingURL=db.d.ts.map

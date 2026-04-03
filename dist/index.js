@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import acServerRoutes from './routes/acServerRoutes.js';
 import { initDB } from './db.js';
+import { startServerControlPoller } from './services/serverControlPoller.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,6 +32,7 @@ app.use('/ac-server', apiKeyMiddleware, acServerRoutes);
 // ------------------------ START SERVER ------------------------
 app.listen(PORT, async () => {
     await initDB();
+    startServerControlPoller();
     console.log(`API corriendo en http://localhost:${PORT}`);
 });
 //# sourceMappingURL=index.js.map

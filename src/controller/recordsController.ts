@@ -1,29 +1,14 @@
 import { Request, Response } from 'express';
-import pool from '../db.js';
-import type { RowDataPacket } from 'mysql2';
-
-// ─────────────────── TIPOS ───────────────────
-interface LapRecord extends RowDataPacket {
-    id: number;
-    steam_id: string;
-    car_model: string;
-    track: string;
-    track_config: string;
-    server_name: string;
-    lap_time: number;
-    valid_lap: number;
-    timestamp: number;
-    date: string;
-}
-
-interface DriverRow extends RowDataPacket {
-    steam_id: string;
-    name: string;
-    created_at: string;
-    updated_at: string;
-}
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { db } from '../db.js';
+import { drivers, lapRecords } from '../db/schema.js';
 
 // ─────────────────── HELPERS ───────────────────
+
+function paramString(v: string | string[] | undefined): string | undefined {
+    if (v === undefined) return undefined;
+    return typeof v === 'string' ? v : v[0];
+}
 
 /** Convierte ms a formato M:SS.mmm */
 function formatTime(ms: number): string {
@@ -40,29 +25,39 @@ function formatTime(ms: number): string {
  */
 export const getDriverRecords = async (req: Request, res: Response) => {
     try {
-        const { steamId } = req.params;
+        const steamId = paramString(req.params.steamId);
         if (!steamId) return res.status(400).json({ error: 'steamId es requerido' });
 
-        const [rows] = await pool.query<LapRecord[]>(
-            `SELECT lr.*, d.name as driver_name
-       FROM lap_records lr
-       LEFT JOIN drivers d ON lr.steam_id = d.steam_id
-       WHERE lr.steam_id = ? AND lr.valid_lap = 1
-       ORDER BY lr.track, lr.car_model`,
-            [steamId]
-        );
+        const rows = await db
+            .select({
+                id: lapRecords.id,
+                steamId: lapRecords.steamId,
+                carModel: lapRecords.carModel,
+                track: lapRecords.track,
+                trackConfig: lapRecords.trackConfig,
+                serverName: lapRecords.serverName,
+                lapTime: lapRecords.lapTime,
+                validLap: lapRecords.validLap,
+                timestamp: lapRecords.timestamp,
+                date: lapRecords.date,
+                driverName: drivers.name,
+            })
+            .from(lapRecords)
+            .leftJoin(drivers, eq(lapRecords.steamId, drivers.steamId))
+            .where(and(eq(lapRecords.steamId, steamId), eq(lapRecords.validLap, 1)))
+            .orderBy(asc(lapRecords.track), asc(lapRecords.carModel));
 
         const records = rows.map(r => ({
             id: r.id,
-            steamId: r.steam_id,
-            driverName: r.driver_name,
-            carModel: r.car_model,
+            steamId: r.steamId,
+            driverName: r.driverName,
+            carModel: r.carModel,
             track: r.track,
-            trackConfig: r.track_config,
-            serverName: r.server_name,
-            lapTime: r.lap_time,
-            lapTimeFormatted: formatTime(r.lap_time),
-            valid: r.valid_lap === 1,
+            trackConfig: r.trackConfig,
+            serverName: r.serverName,
+            lapTime: r.lapTime,
+            lapTimeFormatted: formatTime(r.lapTime),
+            valid: r.validLap === 1,
             timestamp: r.timestamp,
             date: r.date,
         }));
@@ -80,28 +75,35 @@ export const getDriverRecords = async (req: Request, res: Response) => {
  */
 export const getTrackLeaderboard = async (req: Request, res: Response) => {
     try {
-        const { trackName } = req.params;
+        const trackName = paramString(req.params.trackName);
         if (!trackName) return res.status(400).json({ error: 'trackName es requerido' });
 
-        const [rows] = await pool.query<LapRecord[]>(
-            `SELECT lr.*, d.name as driver_name
-       FROM lap_records lr
-       LEFT JOIN drivers d ON lr.steam_id = d.steam_id
-       WHERE lr.track = ? AND lr.valid_lap = 1
-       ORDER BY lr.lap_time ASC`,
-            [trackName]
-        );
+        const rows = await db
+            .select({
+                steamId: lapRecords.steamId,
+                carModel: lapRecords.carModel,
+                track: lapRecords.track,
+                trackConfig: lapRecords.trackConfig,
+                serverName: lapRecords.serverName,
+                lapTime: lapRecords.lapTime,
+                date: lapRecords.date,
+                driverName: drivers.name,
+            })
+            .from(lapRecords)
+            .leftJoin(drivers, eq(lapRecords.steamId, drivers.steamId))
+            .where(and(eq(lapRecords.track, trackName), eq(lapRecords.validLap, 1)))
+            .orderBy(asc(lapRecords.lapTime));
 
         const leaderboard = rows.map((r, i) => ({
             position: i + 1,
-            steamId: r.steam_id,
-            driverName: r.driver_name,
-            carModel: r.car_model,
+            steamId: r.steamId,
+            driverName: r.driverName,
+            carModel: r.carModel,
             track: r.track,
-            trackConfig: r.track_config,
-            serverName: r.server_name,
-            lapTime: r.lap_time,
-            lapTimeFormatted: formatTime(r.lap_time),
+            trackConfig: r.trackConfig,
+            serverName: r.serverName,
+            lapTime: r.lapTime,
+            lapTimeFormatted: formatTime(r.lapTime),
             date: r.date,
         }));
 
@@ -118,28 +120,40 @@ export const getTrackLeaderboard = async (req: Request, res: Response) => {
  */
 export const getTrackCarLeaderboard = async (req: Request, res: Response) => {
     try {
-        const { trackName, carModel } = req.params;
+        const trackName = paramString(req.params.trackName);
+        const carModel = paramString(req.params.carModel);
         if (!trackName || !carModel) {
             return res.status(400).json({ error: 'trackName y carModel son requeridos' });
         }
 
-        const [rows] = await pool.query<LapRecord[]>(
-            `SELECT lr.*, d.name as driver_name
-       FROM lap_records lr
-       LEFT JOIN drivers d ON lr.steam_id = d.steam_id
-       WHERE lr.track = ? AND lr.car_model = ? AND lr.valid_lap = 1
-       ORDER BY lr.lap_time ASC`,
-            [trackName, carModel]
-        );
+        const rows = await db
+            .select({
+                steamId: lapRecords.steamId,
+                carModel: lapRecords.carModel,
+                trackConfig: lapRecords.trackConfig,
+                lapTime: lapRecords.lapTime,
+                date: lapRecords.date,
+                driverName: drivers.name,
+            })
+            .from(lapRecords)
+            .leftJoin(drivers, eq(lapRecords.steamId, drivers.steamId))
+            .where(
+                and(
+                    eq(lapRecords.track, trackName),
+                    eq(lapRecords.carModel, carModel),
+                    eq(lapRecords.validLap, 1),
+                ),
+            )
+            .orderBy(asc(lapRecords.lapTime));
 
         const leaderboard = rows.map((r, i) => ({
             position: i + 1,
-            steamId: r.steam_id,
-            driverName: r.driver_name,
-            carModel: r.car_model,
-            trackConfig: r.track_config,
-            lapTime: r.lap_time,
-            lapTimeFormatted: formatTime(r.lap_time),
+            steamId: r.steamId,
+            driverName: r.driverName,
+            carModel: r.carModel,
+            trackConfig: r.trackConfig,
+            lapTime: r.lapTime,
+            lapTimeFormatted: formatTime(r.lapTime),
             date: r.date,
         }));
 
@@ -156,28 +170,41 @@ export const getTrackCarLeaderboard = async (req: Request, res: Response) => {
  */
 export const getDriverTrackRecords = async (req: Request, res: Response) => {
     try {
-        const { steamId, trackName } = req.params;
+        const steamId = paramString(req.params.steamId);
+        const trackName = paramString(req.params.trackName);
         if (!steamId || !trackName) {
             return res.status(400).json({ error: 'steamId y trackName son requeridos' });
         }
 
-        const [rows] = await pool.query<LapRecord[]>(
-            `SELECT lr.*, d.name as driver_name
-       FROM lap_records lr
-       LEFT JOIN drivers d ON lr.steam_id = d.steam_id
-       WHERE lr.steam_id = ? AND lr.track = ? AND lr.valid_lap = 1
-       ORDER BY lr.lap_time ASC`,
-            [steamId, trackName]
-        );
+        const rows = await db
+            .select({
+                steamId: lapRecords.steamId,
+                carModel: lapRecords.carModel,
+                track: lapRecords.track,
+                trackConfig: lapRecords.trackConfig,
+                lapTime: lapRecords.lapTime,
+                date: lapRecords.date,
+                driverName: drivers.name,
+            })
+            .from(lapRecords)
+            .leftJoin(drivers, eq(lapRecords.steamId, drivers.steamId))
+            .where(
+                and(
+                    eq(lapRecords.steamId, steamId),
+                    eq(lapRecords.track, trackName),
+                    eq(lapRecords.validLap, 1),
+                ),
+            )
+            .orderBy(asc(lapRecords.lapTime));
 
         const records = rows.map(r => ({
-            steamId: r.steam_id,
-            driverName: r.driver_name,
-            carModel: r.car_model,
+            steamId: r.steamId,
+            driverName: r.driverName,
+            carModel: r.carModel,
             track: r.track,
-            trackConfig: r.track_config,
-            lapTime: r.lap_time,
-            lapTimeFormatted: formatTime(r.lap_time),
+            trackConfig: r.trackConfig,
+            lapTime: r.lapTime,
+            lapTimeFormatted: formatTime(r.lapTime),
             date: r.date,
         }));
 
@@ -194,13 +221,19 @@ export const getDriverTrackRecords = async (req: Request, res: Response) => {
  */
 export const getAvailableTracks = async (_req: Request, res: Response) => {
     try {
-        const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT track, MAX(track_config) as track_config, COUNT(*) as total_records, MIN(lap_time) as best_time
-       FROM lap_records
-       WHERE valid_lap = 1
-       GROUP BY track
-       ORDER BY track`
-        );
+        const result = await db.execute(sql`
+            SELECT track, MAX(track_config) as track_config, COUNT(*)::int as total_records, MIN(lap_time) as best_time
+            FROM lap_records
+            WHERE valid_lap = 1
+            GROUP BY track
+            ORDER BY track
+        `);
+        const rows = result.rows as {
+            track: string;
+            track_config: string | null;
+            total_records: number;
+            best_time: number;
+        }[];
 
         const tracks = rows.map(r => ({
             track: r.track,
@@ -223,26 +256,34 @@ export const getAvailableTracks = async (_req: Request, res: Response) => {
  */
 export const getDrivers = async (_req: Request, res: Response) => {
     try {
-        const [rows] = await pool.query<DriverRow[]>(
-            `SELECT d.*, COUNT(lr.id) as total_laps,
+        const result = await db.execute(sql`
+            SELECT d.*, COUNT(lr.id)::int as total_laps,
               MIN(lr.lap_time) as best_time
-       FROM drivers d
-       LEFT JOIN lap_records lr ON d.steam_id = lr.steam_id AND lr.valid_lap = 1
-       GROUP BY d.steam_id
-       ORDER BY d.name`
-        );
+            FROM drivers d
+            LEFT JOIN lap_records lr ON d.steam_id = lr.steam_id AND lr.valid_lap = 1
+            GROUP BY d.steam_id
+            ORDER BY d.name
+        `);
+        const rows = result.rows as {
+            steam_id: string;
+            name: string | null;
+            created_at: string | null;
+            updated_at: string | null;
+            total_laps: number;
+            best_time: number | null;
+        }[];
 
-        const drivers = rows.map(r => ({
+        const driversOut = rows.map(r => ({
             steamId: r.steam_id,
             name: r.name,
             totalLaps: r.total_laps,
             bestTime: r.best_time,
-            bestTimeFormatted: r.best_time ? formatTime(r.best_time) : null,
+            bestTimeFormatted: r.best_time != null ? formatTime(r.best_time) : null,
             createdAt: r.created_at,
             updatedAt: r.updated_at,
         }));
 
-        res.json({ totalDrivers: drivers.length, drivers });
+        res.json({ totalDrivers: driversOut.length, drivers: driversOut });
     } catch (err) {
         console.error('Error getDrivers:', err);
         res.status(500).json({ error: 'Error al consultar pilotos' });
@@ -255,22 +296,23 @@ export const getDrivers = async (_req: Request, res: Response) => {
  */
 export const getLiveBattles = async (_req: Request, res: Response) => {
     try {
-        const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT tb.*, 
-                    d1.name as player1_name, 
+        const result = await db.execute(sql`
+            SELECT tb.*,
+                    d1.name as player1_name,
                     d2.name as player2_name
              FROM touge_battles tb
              LEFT JOIN drivers d1 ON tb.player1_steam_id = d1.steam_id
              LEFT JOIN drivers d2 ON tb.player2_steam_id = d2.steam_id
-             WHERE tb.status = "active"
-             ORDER BY tb.started_at DESC`
-        );
+             WHERE tb.status = 'active'
+             ORDER BY tb.started_at DESC
+        `);
+        const rows = result.rows as Record<string, unknown>[];
 
         const battles = rows.map(r => ({
             ...r,
             trackConfig: r.track_config,
             player1Car: r.player1_car,
-            player2Car: r.player2_car
+            player2Car: r.player2_car,
         }));
 
         res.json({ activeBattles: battles.length, battles });
@@ -287,26 +329,26 @@ export const getLiveBattles = async (_req: Request, res: Response) => {
 export const getBattleHistory = async (req: Request, res: Response) => {
     try {
         const limit = parseInt(req.query.limit as string) || 20;
-        const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT tb.*, 
-                    d1.name as player1_name, 
+        const result = await db.execute(sql`
+            SELECT tb.*,
+                    d1.name as player1_name,
                     d2.name as player2_name,
                     w.name as winner_name
              FROM touge_battles tb
              LEFT JOIN drivers d1 ON tb.player1_steam_id = d1.steam_id
              LEFT JOIN drivers d2 ON tb.player2_steam_id = d2.steam_id
              LEFT JOIN drivers w ON tb.winner_steam_id = w.steam_id
-             WHERE tb.status = "finished"
+             WHERE tb.status = 'finished'
              ORDER BY tb.updated_at DESC
-             LIMIT ?`,
-            [limit]
-        );
+             LIMIT ${limit}
+        `);
+        const rows = result.rows as Record<string, unknown>[];
 
         const battles = rows.map(r => ({
             ...r,
             trackConfig: r.track_config,
             player1Car: r.player1_car,
-            player2Car: r.player2_car
+            player2Car: r.player2_car,
         }));
 
         res.json({ totalBattles: battles.length, battles });

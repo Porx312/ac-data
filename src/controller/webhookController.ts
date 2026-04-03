@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import pool from '../db.js';
+import { db } from '../db.js';
+import { serverBattles, serverEvents } from '../db/schema.js';
 
 /**
  * POST /webhook
@@ -13,32 +14,37 @@ export const saveWebhookEvent = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'Falta proveer el nombre del servidor (serverName)' });
         }
 
-        const eventType = bodyEventType || metadata?.eventType || "unknown";
+        const eventType = bodyEventType || metadata?.eventType || 'unknown';
         const eventId = bodyEventId || metadata?.eventId || null;
-        const eventStatus = bodyEventStatus || metadata?.eventStatus || "started";
+        const eventStatus = bodyEventStatus || metadata?.eventStatus || 'started';
 
-        await pool.query(
-            `INSERT INTO server_events (event_id, server_name, webhook_url, event_type, event_status, metadata)
-             VALUES (?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE 
-                server_name = VALUES(server_name),
-                webhook_url = VALUES(webhook_url),
-                event_type = VALUES(event_type),
-                event_status = VALUES(event_status),
-                metadata = VALUES(metadata)`,
-            [
+        const meta = (metadata ?? {}) as Record<string, unknown>;
+
+        await db
+            .insert(serverEvents)
+            .values({
                 eventId,
                 serverName,
-                webhookUrl || null,
+                webhookUrl: webhookUrl ?? null,
                 eventType,
                 eventStatus,
-                JSON.stringify(metadata || {})
-            ]
-        );
+                metadata: meta,
+                updatedAt: new Date(),
+            })
+            .onConflictDoUpdate({
+                target: serverEvents.eventId,
+                set: {
+                    serverName,
+                    webhookUrl: webhookUrl ?? null,
+                    eventType,
+                    eventStatus,
+                    metadata: meta,
+                    updatedAt: new Date(),
+                },
+            });
 
         console.log(`📥 [Webhook] Evento guardado: ${eventType} desde ${serverName}`);
         res.status(201).json({ message: 'Evento guardado exitosamente' });
-
     } catch (err) {
         console.error('Error saveWebhookEvent:', err);
         res.status(500).json({ error: 'Error al guardar el evento de webhook' });
@@ -61,36 +67,37 @@ export const saveBattleWebhook = async (req: Request, res: Response) => {
         }
 
         const battleStatus = status || 'active';
+        const meta = (metadata ?? {}) as Record<string, unknown>;
 
-        await pool.query(
-            `INSERT INTO server_battles (
-                battle_id, server_name, webhook_url, webhook_secret, 
-                player1_steam_id, player2_steam_id, status, metadata
-             )
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE 
-                server_name = VALUES(server_name),
-                webhook_url = VALUES(webhook_url),
-                webhook_secret = VALUES(webhook_secret),
-                player1_steam_id = VALUES(player1_steam_id),
-                player2_steam_id = VALUES(player2_steam_id),
-                status = VALUES(status),
-                metadata = VALUES(metadata)`,
-            [
+        await db
+            .insert(serverBattles)
+            .values({
                 battleId,
                 serverName,
-                webhookUrl || null,
-                webhookSecret || null,
+                webhookUrl: webhookUrl ?? null,
+                webhookSecret: webhookSecret ?? null,
                 player1SteamId,
                 player2SteamId,
-                battleStatus,
-                JSON.stringify(metadata || {})
-            ]
-        );
+                status: battleStatus,
+                metadata: meta,
+                updatedAt: new Date(),
+            })
+            .onConflictDoUpdate({
+                target: serverBattles.battleId,
+                set: {
+                    serverName,
+                    webhookUrl: webhookUrl ?? null,
+                    webhookSecret: webhookSecret ?? null,
+                    player1SteamId,
+                    player2SteamId,
+                    status: battleStatus,
+                    metadata: meta,
+                    updatedAt: new Date(),
+                },
+            });
 
         console.log(`📥 [Webhook] Batalla guardada: ${battleId} en ${serverName} (Estado: ${battleStatus})`);
         res.status(201).json({ message: 'Batalla guardada exitosamente' });
-
     } catch (err) {
         console.error('Error saveBattleWebhook:', err);
         res.status(500).json({ error: 'Error al guardar la batalla de webhook' });
@@ -117,7 +124,6 @@ export const receiveServerEvent = async (req: Request, res: Response) => {
         switch (event) {
             case 'player_join':
                 console.log(`🔌 [SeverEvent] ${data.name} (${data.steamId}) entró a ${serverName} con un ${data.carModel}`);
-                // Aquí podrías guardar la sesión en la DB si lo deseas
                 break;
 
             case 'player_leave':
@@ -125,7 +131,6 @@ export const receiveServerEvent = async (req: Request, res: Response) => {
                 break;
 
             case 'lap_completed':
-                // Nota: Acorde a las especificaciones, lap_completed no requiere serverName en la raíz
                 console.log(`⏱️ [SeverEvent] Tiempo marcado: ${data.steamId} hizo ${data.lapTime}ms en ${data.trackName}`);
                 break;
 
@@ -139,7 +144,6 @@ export const receiveServerEvent = async (req: Request, res: Response) => {
         }
 
         res.status(200).json({ message: 'Evento procesado correctamente' });
-
     } catch (err) {
         console.error('Error receiveServerEvent:', err);
         res.status(500).json({ error: 'Error interno procesando evento de servidor' });

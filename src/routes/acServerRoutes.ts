@@ -1,12 +1,5 @@
 import { Router } from 'express';
 import {
-  startServer,
-  stopServer,
-  restartServer,
-  serverStatus,
-  configureServer,
-} from '../controller/controller.js';
-import {
   getDriverRecords,
   getTrackLeaderboard,
   getTrackCarLeaderboard,
@@ -21,14 +14,7 @@ import { saveWebhookEvent, saveBattleWebhook, receiveServerEvent } from '../cont
 
 const router = Router();
 
-// ─── Control AC Server ───
-router.post('/start', startServer);
-router.post('/stop', stopServer);
-router.post('/restart', restartServer);
-router.post('/status', serverStatus);
-
-// ─── Configuración del servidor ───
-router.post('/configuration-server', configureServer);
+// Control del servidor AC: tabla ac_server_control (ver serverControlPoller), no rutas HTTP.
 
 // ─── Records / Leaderboards ───
 router.get('/records/drivers', getDrivers);

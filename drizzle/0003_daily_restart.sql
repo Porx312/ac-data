@@ -1,0 +1,2 @@
+ALTER TABLE "ac_server_control" ADD COLUMN "daily_restart_enabled" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "ac_server_control" ADD COLUMN "last_daily_restart_at" timestamp with time zone;

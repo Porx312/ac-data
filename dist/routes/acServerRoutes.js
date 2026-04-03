@@ -1,16 +1,8 @@
 import { Router } from 'express';
-import { startServer, stopServer, restartServer, serverStatus, setPassword, setTrack, } from '../controller/controller.js';
 import { getDriverRecords, getTrackLeaderboard, getTrackCarLeaderboard, getDriverTrackRecords, getAvailableTracks, getDrivers, getLiveBattles, getBattleHistory, } from '../controller/recordsController.js';
-import { saveWebhookEvent } from '../controller/webhookController.js';
+import { saveWebhookEvent, saveBattleWebhook, receiveServerEvent } from '../controller/webhookController.js';
 const router = Router();
-// ─── Control AC Server ───
-router.post('/start', startServer);
-router.post('/stop', stopServer);
-router.post('/restart', restartServer);
-router.post('/status', serverStatus);
-// ─── Configuración del servidor ───
-router.post('/password', setPassword);
-router.post('/track', setTrack);
+// Control del servidor AC: tabla ac_server_control (ver serverControlPoller), no rutas HTTP.
 // ─── Records / Leaderboards ───
 router.get('/records/drivers', getDrivers);
 router.get('/records/tracks', getAvailableTracks);
@@ -23,5 +15,7 @@ router.get('/records/battles/live', getLiveBattles);
 router.get('/records/battles/history', getBattleHistory);
 // ─── Webhooks / Server Events ───
 router.post('/webhook', saveWebhookEvent);
+router.post('/battles/webhook', saveBattleWebhook);
+router.post('/server-event', receiveServerEvent);
 export default router;
 //# sourceMappingURL=acServerRoutes.js.map
