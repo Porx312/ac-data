@@ -2,8 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import acServerRoutes from './routes/acServerRoutes.js';
-import { initDB } from './db.js';
-import { startServerControlPoller } from './services/serverControlPoller.js';
+import { startRedisConvexBridge } from './services/redisConvexBridge.js';
+import { startRedisConfigApplier } from './services/redisConfigApplier.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,8 +31,8 @@ const apiKeyMiddleware = (req, res, next) => {
 app.use('/ac-server', apiKeyMiddleware, acServerRoutes);
 // ------------------------ START SERVER ------------------------
 app.listen(PORT, async () => {
-    await initDB();
-    startServerControlPoller();
+    void startRedisConvexBridge();
+    void startRedisConfigApplier();
     console.log(`API corriendo en http://localhost:${PORT}`);
 });
 //# sourceMappingURL=index.js.map
